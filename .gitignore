@@ -60,3 +60,7 @@ build_apk_log.txt
 # 保留原地供追查，但绝不入库
 .git-broken-*/
 .git-from-develop-clone-*/
+
+# web (Vue/Vite)
+web/node_modules/
+web/dist/

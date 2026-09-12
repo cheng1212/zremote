@@ -5341,6 +5341,9 @@ class _InteractionsPanel extends StatelessWidget {
         children: [
           for (final interaction in state.pendingInteractions)
             InteractionCard(
+              // 稳定 key：pendingInteractions 每帧都是新拷贝，无 key 时
+              // 同一交互的 State 会在刷新中被误判换卡。
+              key: ValueKey<String>('ia-${interaction['interactionId'] ?? ''}'),
               interaction: interaction,
               onResolve: ({optionId, freeText, action, content}) {
                 final sessionId = app.chat?.sessionId;
@@ -5651,8 +5654,14 @@ class _QuestionsViewState extends State<_QuestionsView> {
   @override
   void didUpdateWidget(covariant _QuestionsView old) {
     super.didUpdateWidget(old);
-    // 交互变了（同一张卡被复用）→ 重置作答，避免串题。
-    if (old.questions != widget.questions) {
+    // 交互**内容**变了才重置作答。不能用实例身份比较：pendingInteractions
+    // 每次读取都是 castMapList 的新拷贝，任意一次页面刷新（流式帧/定时器/
+    // 键盘）都会让身份比较失败 → _rebuild 清空已选/已填 → 选项点不动、
+    // 输入被清空、提交恒灰（真机 2026-09-12 实证"完全无法交互"）。
+    final sameInteraction =
+        jsonEncode(old.questions) == jsonEncode(widget.questions) &&
+        old.allowFreeText == widget.allowFreeText;
+    if (!sameInteraction) {
       for (final c in _others) {
         c.dispose();
       }

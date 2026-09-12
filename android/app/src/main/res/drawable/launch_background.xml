@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 启动屏直接用 Citrus Morning 奶油底，避免 白屏→奶油 的闪变 -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@color/citrus_cream" />
+</layer-list>

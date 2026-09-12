@@ -1,0 +1,31 @@
+name: zremote
+description: "ZCode remote chat client — Citrus Morning edition."
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.12.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  web_socket_channel: ^3.0.3
+  crypto: ^3.0.6
+  flutter_markdown: ^0.7.7
+  markdown: ^7.2.2
+  shared_preferences: ^2.3.2
+  file_picker: ^8.1.2
+  flutter_local_notifications: ^18.0.1
+  url_launcher: ^6.3.0
+  fl_chart: ^1.2.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true

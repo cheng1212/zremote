@@ -232,6 +232,13 @@ class _ChatPageState extends State<ChatPage> {
       _prevTotalCount = total;
       return; // 手势中绝不 animateTo（会顶手指）
     }
+    // 弹道保护：惯性滚动进行中同样绝不动手——程序化动画与惯性抢驱动
+    // 就是"转来转去"的又一来源（对齐 _applyAnchorGrowth 的保护）。
+    final pos = _scroll.position;
+    if (pos.hasPixels && pos.userScrollDirection != ScrollDirection.idle) {
+      _prevTotalCount = total;
+      return;
+    }
     if (_followLocked && total > _prevTotalCount && !_scrollingByUser) {
       // 锁存期间错过的新行计数（回底徽标）。
       _unreadWhileLocked += total - _prevTotalCount;
@@ -240,7 +247,6 @@ class _ChatPageState extends State<ChatPage> {
       // 有新消息、用户在底部、且没有翻历史锁 → 回到底部（index 0）。
       // 位移规划交给 AutoFollowMath：一屏内 linear 慢回（不拽），
       // 超过一屏直接不动手（交给锚定通道，别抢用户视线）。
-      final pos = _scroll.position;
       if (!pos.hasPixels) {
         _prevTotalCount = total;
         return;
@@ -491,20 +497,9 @@ class _ChatPageState extends State<ChatPage> {
       _echoesVersion++;
       _sending = true;
       _input.clear();
-      // 发消息 = 明确要跟这次对话：解锁跟随并立刻回底，
-      // 否则刚滚上去看过历史就再也看不到自己发的内容。
-      _followLocked = false;
-      _atBottom = true;
-    });
-    // 显式回底：不走 AutoFollowMath 的一屏上限——用户刚点了发送，
-    // 无论之前翻到多深都必须把最新内容（自己的消息 + 回复）带到他眼前。
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      _scroll.animateTo(
-        0,
-        duration: const Duration(milliseconds: 220),
-        curve: Curves.easeOut,
-      );
+      // 发送**不再**改变视口位置（2026-09-13 用户"发送后乱划"定位）：
+      // 人在底部 → 自然跟随新内容；人在翻历史 → 停在原地，新回复走
+      // 未读徽标（回底按钮 99+）。强行解锁+拽底会把读历史的用户甩走。
     });
     // 20s 仍未送达 → 气泡里亮出「网络较慢」，给个心理预期。
     _slowTimer?.cancel();

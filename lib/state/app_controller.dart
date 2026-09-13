@@ -1320,19 +1320,21 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
     return out;
   }
 
-  /// 「全部对话」视图的可见合成：删除进行中过滤 + 归档/已删排重 +
+  /// 「全部对话」视图的可见合成：删除进行中过滤 + 已删排重 +
   /// 索引流实时增补 + 打开会话的 phase 覆盖 + 置顶 + 排序。
-  /// 与单项目视图同一条「服务端为准」纪律——此前这个视图吃的是连接
-  /// 时刻的 bootstrap 快照，相位永远停在打开 App 那一刻（用户报障：
-  /// 运行中显示空闲且久不恢复），归档会话也会混进主列表。
+  /// 与单项目视图同一条「服务端为准」纪律。
+  ///
+  /// **archived 不过滤**（2026-09-13 探针实测裁定）：桌面端的 archived
+  /// 是「会话已关闭」的生命周期标记（36/41 都带，连正在跑的会话都带），
+  /// 桌面端自己的主列表照样显示——服务端有什么就显示什么。归档的单独
+  /// 入口是归档 tab（跨项目聚合），不是从主列表里藏掉。
   List<Map<String, dynamic>> _composeVisibleAllTasks(
     List<Map<String, dynamic>> all,
   ) {
     final kept = <Map<String, dynamic>>[
       for (final t in all)
         if (!_deletingTasks.containsKey('${t['taskId']}'))
-          if (!_archivedTaskIds.contains('${t['taskId']}'))
-            if (!(t['archived'] == true || t['deleted'] == true)) t,
+          if (t['deleted'] != true) t,
     ];
     return _applyPinsAndSort([
       for (final t in _enrichFromIndex(kept))
@@ -1598,6 +1600,11 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
   /// 归档会话不回主列表（归档/取消归档时同步增删）。
   final _archivedTaskIds = <String>{};
 
+  /// 归档列表：**跨项目聚合**（2026-09-13 探针实测裁定）——桌面端的归档
+  /// 是全局视图（7 个项目合计 36 条），只查当前桥一个项目必然比服务端
+  /// 少一大截（用户报障：服务端归档比本地多很多）。task 通道是 host 级
+  /// 服务、按参数里的 workspacePath 路由（跨项目置顶/归档直发早已实证），
+  /// 逐项目并发直发合并即可，不切桥。
   Future<void> loadArchivedTasks() async {
     if (!_backgroundGate('archived')) return;
     final bridge = this.bridge;
@@ -1605,18 +1612,37 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
     archivedLoading = true;
     notifyListeners();
     try {
-      final res = await bridge.channels.call(
-        Chan.task,
-        'listArchivedTasks',
-        [bridge.scope],
-        timeout: const Duration(seconds: 12),
-      );
-      archivedTasks = castMapList(res);
+      final scopes = <Map<String, dynamic>>[
+        for (final w in workspaces)
+          if ('${w['workspacePath'] ?? ''}'.isNotEmpty)
+            {
+              'workspacePath': '${w['workspacePath']}',
+              if (w['workspaceIdentity'] is String &&
+                  (w['workspaceIdentity'] as String).isNotEmpty)
+                'workspaceIdentity': w['workspaceIdentity'],
+            },
+      ];
+      final resList = await Future.wait([
+        for (final scope in scopes)
+          bridge.channels
+              .call(Chan.task, 'listArchivedTasks', [
+                scope,
+              ], timeout: const Duration(seconds: 12))
+              .catchError((Object e) {
+                log('[task] ${scope['workspacePath']} 归档拉取失败: $e');
+                return const [];
+              }),
+      ]);
+      final merged = <String, Map<String, dynamic>>{};
+      for (final res in resList) {
+        for (final t in castMapList(res)) {
+          merged['${t['taskId']}'] = t;
+        }
+      }
+      archivedTasks = merged.values.toList();
       _archivedTaskIds
         ..clear()
-        ..addAll([for (final t in archivedTasks) '${t['taskId']}']);
-    } on Object catch (e) {
-      log('[task] 归档列表加载失败: $e');
+        ..addAll(merged.keys);
     } finally {
       archivedLoading = false;
       notifyListeners();

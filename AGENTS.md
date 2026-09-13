@@ -166,7 +166,11 @@ powershell -File build-flutter-apk.ps1   # 后台执行，日志 flutter-build.l
   已删排重+删除进行中过滤+`_enrichFromIndex` 索引实时增补+livePhase 覆盖），
   修「运行中显示空闲久不恢复」（原视图吃连接时刻 bootstrap 快照）与归档重复；
   跨项目开会话的切桥改 `openWorkspace(preserveView:true)`——只切桥不动用户列表
-  视图，不再被拽进项目分类。
+  视图，不再被拽进项目分类。**第五批（同日，探针实测裁定归档语义）**：桌面端
+  的 `archived` 是「会话已关闭」生命周期标记（41 条里 36 条带，运行中的也带），
+  不是「用户收起」——「全部对话」不再过滤 archived；归档 tab 改跨项目聚合
+  （逐项目并发 listArchivedTasks，原只查当前桥项目导致 36 vs 个位数的差）。
+  探针：test/manual_server_list_audit_test.dart（只读，链接门控）。
 - **待真机验证（接手批次新增）**：⑤切到桌面端没启动过的项目也能正常打开（不再报
   runtime is not running）；⑥切换失败时界面留在原项目而不是"标题新项目 + 旧列表"；
   ⑦「全部对话」能列出所有项目的会话且卡片带所属项目标签、点别的项目的会话能打开；

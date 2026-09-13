@@ -10,6 +10,7 @@
 
 ## 索引
 
+- 2026-09-13 锚定断补标记要盖住所有非流式增长——修了翻页漏了快照重同步 ｜关键词：锚定 快照 resync 重同步 oldestRowId 结构性变化 hasClients 滑向历史端
 - 2026-09-11 删除会话复活——deleteTask 只摘任务条目，会话本体要调 deleteSession ｜关键词：删除 复活 deleteSession sessions-index 多设备
 - 2026-09-11 仓库迁移后状态层文档未同步——文档命令指向封存目录 ｜关键词：迁移 状态层 封存目录 develop 分支 文档对账 AGENTS.md
 - 2026-09-11 订阅带了 existing-only——冷项目运行时未启动必失败 ｜关键词：existing-only start-if-needed runtimePolicy 项目切换 runtime is not running app.asar 日志取证
@@ -21,6 +22,23 @@
 ---
 
 ## 条目
+
+### [2026-09-13] 锚定断补标记要盖住所有「非流式增长」——修了翻页漏了快照重同步
+- 现象：例行审计发现 BUG-32 的断环只盖了 loadOlder 翻页；resync 快照整体
+  重置 rows 时不带任何标记，行集合被换过照样被当成视口漂移去补——停在
+  历史区遇重同步（下拉刷新/降级恢复/看门狗）就持续往历史端滑。
+- 根因：「按总高增量补偿」分不清增长来源，每一种非流式变化（翻页/快照/
+  窗口迁移）都需要自己的断补标记；只给当时报障的那条链路立标记，同族
+  链路漏网。
+- 解决：`_anchorAgainstGrowth` 记最旧行 rowId（`_anchorOldestRowId`），
+  变化即结构性变化，重定基线不补（BUG-37）。顺带补齐全链
+  `hasClients`/`mounted` 防护。
+- 教训：①断补标记的覆盖面要按「变化来源」枚举，不能按「报障来源」打
+  补丁——与"同族写操作必须成族排查"是同一条纪律；②`_scroll.position`
+  在 controller 未附加时直接抛，`hasClients` 防护必须放在取 position
+  **之前**，放在 `hasContentDimensions` 判断后面为时已晚。
+- 关联：lib/ui/chat_page.dart `_anchorAgainstGrowth`/`_oldestRowId`、
+  docs/BUGFIXES.md BUG-32/37
 
 ### [2026-09-11] 删除会话"复活"——task 通道删除不删会话本体
 - 现象：手机上删除会话成功（列表消失），平板上刷新后又出现；手机因本地墓碑永远看不到复活，掩盖了服务端没删干净的事实。

@@ -718,3 +718,24 @@
 - 扰动源 2：`_maybeAutoScroll` 无弹道保护——惯性滑动中被 AutoFollowMath 的 animateTo 抢驱动。补 `userScrollDirection != idle` 禁手（对齐锚定通道既有保护）。
 - 滚动 doctrine 收敛为一句话：**程序化滚动只允许发生在 (a) 用户在底部跟随新内容，(b) 用户明确点了回底按钮；其余一切情况（发送/弹道/手势/翻页）一律不动视口。**
 - 验证：analyze 0 问题 + 214 测试全过；待真机滑动回归（连滑/急停/发送/翻页四场景）。
+
+### BUG-37 滚动锚定两处残留：快照重同步未断补 + 全链缺 hasClients 防护（例行审计发现）
+- 根因 1（滑向历史端的残留口子）：BUG-32 只给「翻页」立了纪元标记，但
+  **resync 快照不走翻页**——快照类帧整体重置 rows，服务端重发的窗口可能
+  和原来完全不同；总高增量分不清「最新端长高」和「行集合被换过」，后者
+  照样按步长去「追」＝用户停在历史区时列表持续往历史端滑。深读历史时
+  恰逢下拉重同步/降级恢复/看门狗重同步即触发。
+- 修复 1：`_anchorAgainstGrowth` 记最旧行 rowId（`_anchorOldestRowId`），
+  最旧行变化 = 结构性变化，只重定基线、清欠账、不补偿；翻页纪元分支
+  同步翻篇最旧行基线。
+- 根因 2（崩溃隐患）：`_maybeAutoScroll`/`_anchorAgainstGrowth`/
+  `_applyAnchorGrowth`/键盘延迟回底四处直接摸 `_scroll.position`，
+  controller 未附加（页面收尾/列表暂时不在树上）时直接抛 StateError；
+  `_maybeAutoScroll` 的 postFrame 从 build 无条件排，连 `mounted` 都没查。
+- 修复 2：四处补 `hasClients` 防护 + `_maybeAutoScroll` 补 `mounted`。
+- 验证：analyze 0 问题 + 214 测试全过（2026-09-13）。待真机回归：长会话
+  读历史时触发下拉重同步/断线恢复，视口应钉住不动。
+- 教训：「按增量补偿」的方案，每一种**不经流式增长**的内容变化（翻页、
+  快照、行集合替换）都得有断补标记——BUG-32 断了翻页这个环，resync 这个
+  环还开着；防护断言（hasClients/mounted）要放在**拿 position 之前**，
+  放在 hasContentDimensions 判断后面已经晚了。

@@ -174,7 +174,7 @@ class _ChatPageState extends State<ChatPage> {
     if (_focusNode.hasFocus && _atBottom && !_followLocked) {
       // 键盘弹起且在底部 → 稍微延迟滚到底，等键盘动画结束
       Future.delayed(const Duration(milliseconds: 100), () {
-        if (mounted && _focusNode.hasFocus) {
+        if (mounted && _focusNode.hasFocus && _scroll.hasClients) {
           _scroll.animateTo(
             0,
             duration: const Duration(milliseconds: 120),
@@ -204,6 +204,19 @@ class _ChatPageState extends State<ChatPage> {
   String? _anchorSid; // 基线所属会话；换会话即重建基线
   double _prevContentExtent = 0; // 上一帧 maxScrollExtent + viewportDimension
 
+  /// 上次见到的最旧行 rowId：变了 = 行集合被整体换过（快照重同步/窗口
+  /// 迁移，BUG-37）。翻页有纪元标记兜着，但 resync 快照不走翻页——总高
+  /// 增量分不清「最新端长高」和「行集合被换过」，后者补了就是把人往
+  /// 历史端送。结构性变化只重定基线，一分不补。
+  int? _anchorOldestRowId;
+
+  /// 当前列表最旧行 rowId（rows 首元素；空会话给 null）。
+  int? _oldestRowId() {
+    final rows = _state?.rows;
+    if (rows == null || rows.isEmpty) return null;
+    return (rows.first['rowId'] as num?)?.toInt();
+  }
+
   /// 上次见到的 loadOlder 合并纪元：变了=本轮增长来自历史端翻页，
   /// 不补（BUG-32 自动回拖循环的断环点）。
   int _prevOlderMergeEpoch = 0;
@@ -225,7 +238,9 @@ class _ChatPageState extends State<ChatPage> {
   /// 监听会话状态变化，在底部时自动滚到底。
   void _maybeAutoScroll() {
     final state = _state;
-    if (state == null) return;
+    // postFrame 是从 build 里无条件排的：页面可能在收尾、或列表暂时不在
+    // 树上——controller 未附加时摸 position 直接抛，mounted/hasClients 都要挡。
+    if (state == null || !mounted || !_scroll.hasClients) return;
     _anchorAgainstGrowth();
     final total = state.rows.length + _visibleEchoes(state.rows).length;
     if (_scrollingByUser) {
@@ -273,12 +288,15 @@ class _ChatPageState extends State<ChatPage> {
   /// viewportDimension，用总高而非 extent 本身做增量，键盘弹收这类
   /// 「视口变、内容不变」的情况会自动抵消成 0，不会误判为内容增长。
   void _anchorAgainstGrowth() {
+    if (!_scroll.hasClients) return;
     final pos = _scroll.position;
     if (!pos.hasContentDimensions || !pos.hasPixels) return;
     final contentHeight = pos.maxScrollExtent + pos.viewportDimension;
+    final oldest = _oldestRowId();
     if (!_anchorReady || _anchorSid != _sid) {
       _anchorReady = true;
       _anchorSid = _sid;
+      _anchorOldestRowId = oldest;
       _prevContentExtent = contentHeight;
       _coalescedAnchorDelta = 0;
       _prevOlderMergeEpoch = _state?.olderMergeEpoch ?? 0;
@@ -291,7 +309,18 @@ class _ChatPageState extends State<ChatPage> {
     final olderEpoch = _state?.olderMergeEpoch ?? 0;
     if (olderEpoch != _prevOlderMergeEpoch) {
       _prevOlderMergeEpoch = olderEpoch;
+      _anchorOldestRowId = oldest; // 翻页也换最旧行，基线一起翻篇
       _prevContentExtent = contentHeight;
+      return;
+    }
+    // 快照重同步/行集合整体替换（BUG-37）：服务端重发的窗口可能和原来
+    // 完全不同，总高增量分不清「最新端长高」还是「行集合被换过」——
+    // 后者按步长去「追」就是持续往历史端滑。最旧行变了 = 结构性变化，
+    // 只重定基线不补偿。
+    if (oldest != _anchorOldestRowId) {
+      _anchorOldestRowId = oldest;
+      _prevContentExtent = contentHeight;
+      _coalescedAnchorDelta = 0;
       return;
     }
     final growth = contentHeight - _prevContentExtent;
@@ -338,6 +367,7 @@ class _ChatPageState extends State<ChatPage> {
   /// 改成短时长动画后，同样的修正量被摊成连续移动，视觉上只是内容被
   /// 稳稳钉住，看不出修正动作。
   void _applyAnchorGrowth(double growth) {
+    if (!_scroll.hasClients) return;
     final pos = _scroll.position;
     if (!pos.hasContentDimensions || !pos.hasPixels) return;
     // 弹道保护：用户松手后的惯性滚动中不做补偿动画，否则会打断惯性

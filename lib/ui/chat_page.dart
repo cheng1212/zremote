@@ -44,7 +44,17 @@ class ChatPage extends StatefulWidget {
 /// 长高吃自己的固定空间、列表内容零变化——reverse 列表的逐帧锚定
 /// 补偿因此退出流式主战场。落定后行回列表，面板消失（两次单次
 /// 离散变化，无需逐帧补偿）。
-class _StreamingPanel extends StatelessWidget {
+///
+/// 高度封顶（Telegram「流式槽位」思想的 Flutter 化）：面板曾无约束，
+/// 内容每长一寸就把 Expanded 列表压矮一寸——用户停在历史区时视口被
+/// 持续顶向最新端（「正在回复的框越来越长」「人被往回拉」的共同根源）。
+/// 封顶后列表空间恒定，流式推再久也压不到视口。
+///
+/// 内容超出上限后内部滚动：未回看时每个 token tick 跟到最新输出
+/// （LLM UI 惯例，ChatGPT/Open WebUI 同款）；用户在面板内上滑回看
+/// 则停住（离底 >60px 视为回看，贴底恢复跟随——主列表 FollowLock 的
+/// 面板内简化版）。
+class _StreamingPanel extends StatefulWidget {
   final Map<String, dynamic> row;
   final ConversationV4? transport;
   final String sessionId;
@@ -56,11 +66,74 @@ class _StreamingPanel extends StatelessWidget {
   });
 
   @override
+  State<_StreamingPanel> createState() => _StreamingPanelState();
+}
+
+class _StreamingPanelState extends State<_StreamingPanel> {
+  final _scrollCtrl = ScrollController();
+
+  /// false = 用户在面板内回看已输出内容，停止跟尾。
+  bool _followTail = true;
+
+  /// 同帧去重：一个 token tick 最多排一次跟尾（调研原则 6：跟尾要节流）。
+  bool _tailScheduled = false;
+
+  @override
+  void didUpdateWidget(covariant _StreamingPanel old) {
+    super.didUpdateWidget(old);
+    // 每个 token tick 都会走到这里。post-frame 里量（布局后才有新
+    // maxScrollExtent），未回看就跳到内容尾部（最新输出）。
+    if (_tailScheduled) return;
+    _tailScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _tailScheduled = false;
+      if (!mounted || !_followTail || !_scrollCtrl.hasClients) return;
+      // 滚动进行中（手指拖拽/惯性）绝不 jump——调研原则 5/6：
+      // 跟随滚动与用户手势对打是「滑不动」的直接来源。
+      // jumpTo 本身走 IdleScrollActivity，不会误置 isScrolling。
+      if (_scrollCtrl.position.isScrollingNotifier.value) return;
+      final pos = _scrollCtrl.position;
+      if (pos.maxScrollExtent - pos.pixels > 1) {
+        _scrollCtrl.jumpTo(pos.maxScrollExtent);
+      }
+    });
+  }
+
+  bool _onScrollNotification(ScrollNotification n) {
+    if (n is ScrollEndNotification && _scrollCtrl.hasClients) {
+      final pos = _scrollCtrl.position;
+      // 离底 >48px 视为回看（调研原则 4：业界阈值 5~56px），贴底恢复跟随。
+      final away = pos.maxScrollExtent - pos.pixels > 48;
+      if (away != _followTail) setState(() => _followTail = away);
+    }
+    return false;
+  }
+
+  @override
+  void dispose() {
+    _scrollCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(14, 6, 14, 0),
-      child: buildRowCard(row, transport: transport, sessionId: sessionId),
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.sizeOf(context).height * 0.42,
+      ),
+      child: NotificationListener<ScrollNotification>(
+        onNotification: _onScrollNotification,
+        child: SingleChildScrollView(
+          controller: _scrollCtrl,
+          child: buildRowCard(
+            widget.row,
+            transport: widget.transport,
+            sessionId: widget.sessionId,
+          ),
+        ),
+      ),
     );
   }
 }
@@ -5599,30 +5672,37 @@ class _InteractionsPanel extends StatelessWidget {
         border: Border(top: BorderSide(width: 1.4, color: ZT.lemon)),
       ),
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-      child: Column(
-        children: [
-          for (final interaction in state.pendingInteractions)
-            InteractionCard(
-              // 稳定 key：pendingInteractions 每帧都是新拷贝，无 key 时
-              // 同一交互的 State 会在刷新中被误判换卡。
-              key: ValueKey<String>('ia-${interaction['interactionId'] ?? ''}'),
-              interaction: interaction,
-              onResolve: ({optionId, freeText, action, content}) {
-                final sessionId = app.chat?.sessionId;
-                if (sessionId == null) return Future.value(null);
-                return app
-                    .resolveInteraction(
-                      sessionId,
-                      '${interaction['interactionId'] ?? ''}',
-                      optionId: optionId,
-                      freeText: freeText,
-                      action: action,
-                      content: content,
-                    )
-                    .then((value) => null);
-              },
-            ),
-        ],
+      // 封顶 + 内部滚动：多条交互堆叠时不再无限挤压列表视口
+      //（与流式面板同款治理，BUG-38 家族）。
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.sizeOf(context).height * 0.7,
+      ),
+      child: SingleChildScrollView(
+        child: Column(
+          children: [
+            for (final interaction in state.pendingInteractions)
+              InteractionCard(
+                // 稳定 key：pendingInteractions 每帧都是新拷贝，无 key 时
+                // 同一交互的 State 会在刷新中被误判换卡。
+                key: ValueKey<String>('ia-${interaction['interactionId'] ?? ''}'),
+                interaction: interaction,
+                onResolve: ({optionId, freeText, action, content}) {
+                  final sessionId = app.chat?.sessionId;
+                  if (sessionId == null) return Future.value(null);
+                  return app
+                      .resolveInteraction(
+                        sessionId,
+                        '${interaction['interactionId'] ?? ''}',
+                        optionId: optionId,
+                        freeText: freeText,
+                        action: action,
+                        content: content,
+                      )
+                      .then((value) => null);
+                },
+              ),
+          ],
+        ),
       ),
     );
   }

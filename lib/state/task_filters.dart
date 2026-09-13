@@ -10,6 +10,25 @@ enum TaskFilter { all, pinned, recent, archived }
 /// 排序键。lastActive=最近更新（默认），created=创建时间，title=标题。
 enum TaskSortKey { lastActive, created, title }
 
+/// 会话状态筛选（用户 2026-09-14：「按运行中/出错等状态找会话」）。
+/// 分组是有意收敛的：9 种 phase 归并成 3 个用户视角组，chips 才放得下。
+enum TaskStatusFilter { all, running, error, waitingInput }
+
+/// 会话 map 是否命中状态筛选。
+/// 组→phase 口径与 `phaseStyle`（theme.dart）一致：
+/// running 组含预热中（prewarming 也是"在跑"），error 组含已完成但出错
+/// （completedError 对用户的语义就是"这个会话出错了"）。
+bool taskMatchesStatusFilter(Map<String, dynamic> t, TaskStatusFilter f) {
+  if (f == TaskStatusFilter.all) return true;
+  final phase = '${t['phase'] ?? ''}';
+  return switch (f) {
+    TaskStatusFilter.running => phase == 'running' || phase == 'prewarming',
+    TaskStatusFilter.error => phase == 'error' || phase == 'completedError',
+    TaskStatusFilter.waitingInput => phase == 'waitingInput',
+    TaskStatusFilter.all => true,
+  };
+}
+
 /// 查询串 → 匹配判定：标题 + 预览包含（大小写不敏感）；空串恒真。
 bool taskMatchesQuery(Map<String, dynamic> t, String query) {
   final q = query.trim().toLowerCase();
@@ -81,6 +100,7 @@ List<Map<String, dynamic>> visibleTaskCards(
   required TaskFilter filter,
   required String query,
   required TaskSortKey sortKey,
+  TaskStatusFilter statusFilter = TaskStatusFilter.all,
   List<Map<String, dynamic>> archived = const [],
   int? nowMs,
   int recentDays = 7,
@@ -93,7 +113,9 @@ List<Map<String, dynamic>> visibleTaskCards(
   };
   final out = [
     for (final t in pool)
-      if (taskMatchesQuery(t, query)) t,
+      if (taskMatchesQuery(t, query) &&
+          taskMatchesStatusFilter(t, statusFilter))
+        t,
   ];
   return sortTaskCardsBy(out, sortKey);
 }

@@ -223,6 +223,74 @@ void main() {
       );
       expect(out.map((t) => t['taskId']), ['z']);
     });
+
+    test('statusFilter=running 命中 running 与 prewarming', () {
+      final out = visibleTaskCards(
+        [
+          {'taskId': 'r', 'title': 'R', 'phase': 'running'},
+          {'taskId': 'w', 'title': 'W', 'phase': 'prewarming'},
+          {'taskId': 'i', 'title': 'I', 'phase': 'idle'},
+        ],
+        filter: TaskFilter.all,
+        query: '',
+        sortKey: TaskSortKey.lastActive,
+        statusFilter: TaskStatusFilter.running,
+      );
+      expect(out.map((t) => t['taskId']), ['r', 'w']);
+    });
+
+    test('statusFilter=error 命中 error 与 completedError', () {
+      final out = visibleTaskCards(
+        [
+          {'taskId': 'e', 'title': 'E', 'phase': 'error'},
+          {'taskId': 'ce', 'title': 'CE', 'phase': 'completedError'},
+          {'taskId': 'ok', 'title': 'OK', 'phase': 'completedSuccess'},
+        ],
+        filter: TaskFilter.all,
+        query: '',
+        sortKey: TaskSortKey.lastActive,
+        statusFilter: TaskStatusFilter.error,
+      );
+      expect(out.map((t) => t['taskId']), ['e', 'ce']);
+    });
+
+    test('statusFilter=waitingInput 只命中等输入；all 恒真', () {
+      final pool = [
+        {'taskId': 'wi', 'title': 'WI', 'phase': 'waitingInput'},
+        {'taskId': 'i', 'title': 'I', 'phase': 'idle'},
+      ];
+      final waiting = visibleTaskCards(
+        pool,
+        filter: TaskFilter.all,
+        query: '',
+        sortKey: TaskSortKey.lastActive,
+        statusFilter: TaskStatusFilter.waitingInput,
+      );
+      expect(waiting.map((t) => t['taskId']), ['wi']);
+      final all = visibleTaskCards(
+        pool,
+        filter: TaskFilter.all,
+        query: '',
+        sortKey: TaskSortKey.lastActive,
+        statusFilter: TaskStatusFilter.all,
+      );
+      expect(all.length, 2);
+    });
+
+    test('statusFilter 与 query 叠加生效', () {
+      final out = visibleTaskCards(
+        [
+          {'taskId': 'r1', 'title': 'deploy web', 'phase': 'running'},
+          {'taskId': 'r2', 'title': 'deploy api', 'phase': 'running'},
+          {'taskId': 'r3', 'title': 'build web', 'phase': 'idle'},
+        ],
+        filter: TaskFilter.all,
+        query: 'web',
+        sortKey: TaskSortKey.lastActive,
+        statusFilter: TaskStatusFilter.running,
+      );
+      expect(out.map((t) => t['taskId']), ['r1']);
+    });
   });
 
   group('parseBootstrapTasks（bootstrap tasks[] → 跨项目任务卡）', () {

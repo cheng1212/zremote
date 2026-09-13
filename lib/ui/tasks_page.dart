@@ -815,7 +815,6 @@ class _TasksPageState extends State<TasksPage> {
                   ),
                 _searchBar(),
                 _filterRow(),
-                _statusRow(),
                 Expanded(
                   child: RefreshIndicator(
                     color: ZT.primaryDeep,
@@ -1820,13 +1819,13 @@ class _TasksPageState extends State<TasksPage> {
     );
   }
 
-  /// 筛选 tab 一行（全部/置顶/归档 + 批量）。
+  /// 筛选 tab 一行（全部/置顶/归档 + 批量）+ 右侧状态下拉。
   ///
   /// 「最近」chip 有意不接（2026-09-11 用户决定）——`TaskFilter.recent` 的
   /// 枚举、7 天窗口逻辑、标签与单测都还在，只是没渲染。**这是有意的，
   /// 不是漏了**，别当 bug 补回来。
-  /// 右侧「最近更新」排序按钮已按用户要求移除（2026-09-14）：排序恒为
-  /// 数据层默认序（最近更新），状态筛选独立成行（见 [_statusRow]）。
+  /// 右侧按钮（2026-09-14 用户裁定）：原「最近更新」排序删除，同位置换成
+  /// 会话状态筛选——一个胶囊按钮点开下拉切换，不占第二行。
   Widget _filterRow() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
@@ -1883,51 +1882,67 @@ class _TasksPageState extends State<TasksPage> {
               ],
             ),
           ),
-        ],
-      ),
-    );
-  }
-
-  /// 状态筛选一行（用户 2026-09-14 新增）：全部 / 运行中 / 出错 / 等输入。
-  /// 与上方视图筛选（全部/置顶/归档）是两组正交维度，分行摆放避免混读；
-  /// 9 种 phase 收敛成 3 组的口径见 `taskMatchesStatusFilter`。
-  Widget _statusRow() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-      child: Wrap(
-        spacing: 6,
-        runSpacing: 6,
-        children: [
-          for (final f in TaskStatusFilter.values) _statusChip(f),
-        ],
-      ),
-    );
-  }
-
-  Widget _statusChip(TaskStatusFilter f) {
-    final label = switch (f) {
-      TaskStatusFilter.all => '全部状态',
-      TaskStatusFilter.running => '运行中',
-      TaskStatusFilter.error => '出错',
-      TaskStatusFilter.waitingInput => '等输入',
-    };
-    final selected = _statusFilter == f;
-    return GestureDetector(
-      onTap: () => setState(() => _statusFilter = f),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 6),
-        decoration: ShapeDecoration(
-          color: selected ? ZT.lemon.withValues(alpha: 0.55) : ZT.surface,
-          shape: StadiumBorder(side: ZT.inkSide(w: selected ? 1.6 : 1.2)),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 12.5,
-            fontWeight: FontWeight.w800,
-            color: selected ? ZT.ink : ZT.inkSoft,
+          const SizedBox(width: 8),
+          PopupMenuButton<TaskStatusFilter>(
+            tooltip: '按状态筛选',
+            initialValue: _statusFilter,
+            onSelected: (f) => setState(() => _statusFilter = f),
+            color: ZT.surface,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(ZT.radius),
+              side: ZT.inkSide(w: 1.2),
+            ),
+            itemBuilder: (_) => const [
+              PopupMenuItem(
+                value: TaskStatusFilter.all,
+                child: Text('全部状态', style: TextStyle(fontSize: 13)),
+              ),
+              PopupMenuItem(
+                value: TaskStatusFilter.running,
+                child: Text('运行中', style: TextStyle(fontSize: 13)),
+              ),
+              PopupMenuItem(
+                value: TaskStatusFilter.error,
+                child: Text('出错', style: TextStyle(fontSize: 13)),
+              ),
+              PopupMenuItem(
+                value: TaskStatusFilter.waitingInput,
+                child: Text('等输入', style: TextStyle(fontSize: 13)),
+              ),
+            ],
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: ShapeDecoration(
+                color: ZT.surface,
+                shape: StadiumBorder(side: ZT.inkSide(w: 1.2)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(
+                    Icons.filter_alt_rounded,
+                    size: 14,
+                    color: ZT.inkSoft,
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    _statusLabel(_statusFilter),
+                    style: const TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w800,
+                      color: ZT.inkSoft,
+                    ),
+                  ),
+                  const Icon(
+                    Icons.expand_more_rounded,
+                    size: 14,
+                    color: ZT.inkSoft,
+                  ),
+                ],
+              ),
+            ),
           ),
-        ),
+        ],
       ),
     );
   }
@@ -1966,6 +1981,12 @@ class _TasksPageState extends State<TasksPage> {
     );
   }
 
+  static String _statusLabel(TaskStatusFilter f) => switch (f) {
+    TaskStatusFilter.all => '全部状态',
+    TaskStatusFilter.running => '运行中',
+    TaskStatusFilter.error => '出错',
+    TaskStatusFilter.waitingInput => '等输入',
+  };
 }
 
 /// 卡片信息 chip：等宽小字 + 淡底描边（模型名用）。

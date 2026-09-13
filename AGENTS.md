@@ -20,9 +20,12 @@
   环境事实、未完成待办、踩过的坑）。**接手先读它，再读本节。**
 - **这是什么**：ZCode 远程会话的 Android 客户端（Flutter），手机连桌面端 ZCode：看任务、聊天、传图、管计划、批权限。
 - **协议是逆向出来的**：改协议层前必读 `docs/API.md` 对应小节；协议常量只改 `lib/protocol/constants.dart`。
-- **怎么验证**：`flutter analyze` + `flutter test`（在项目根 `D:\tools\zremote-new` 下执行）。
-  跑 test 前必须设 `no_proxy`/`NO_PROXY`=`localhost,127.0.0.1,::1`——本机会话注入 `http(s)_proxy`，
+- **怎么验证**：跑 `./test.sh`（Git Bash，一条命令双绿：自动设 `no_proxy` + analyze + test）。
+  手动等价：`flutter analyze` + `flutter test`（项目根 `D:\tools\zremote-new` 下），跑 test 前必须设
+  `no_proxy`/`NO_PROXY`=`localhost,127.0.0.1,::1`——本机会话注入 `http(s)_proxy`，
   否则 flutter_tester 回连本机 WebSocket 被代理拦截，测试**全线假失败**（报 WebSocketException）。
+  CI（GitHub Actions `.github/workflows/app-ci.yml`）每次 push 自动跑同样门禁（最后验证：2026-09-14）。
+- **manual 探针**：已隔离至 `test/manual/`（@Tags(manual) 默认排除），跑法见 `test/manual/README.md`（最后验证：2026-09-14）。
 - **怎么打包**：用 `build-flutter-apk.ps1`（完整构建）；**别只用 `build-apk.ps1`/gradlew 单独打包——gradlew 不编译 Dart**（见下「环境备忘」）。
 - **绝对别做**：别把配对凭据（sid+hash）当普通数据处理——它就是凭据，可冒充终端会话；别把密钥写进任何记忆文件；别伪造坑层历史条目。
 - **分支纪律**：**单分支 `master`**，小步提交（`develop` 已不存在，旧仓库说法作废）。
@@ -72,7 +75,7 @@ D:\tools\zremote-new\
 │   │                          #   + composer_logic / image_cache / rows / suggestions
 │   └── theme.dart             # Citrus Morning 主题；ZT.tapMin=48 最小触控目标
 │                              #   （iconButtonTheme 已统一撑到 48dp，别再压 compact/shrinkWrap）
-├── test\                      # flutter test 全量单测；manual_* 前缀为手动探测脚本
+├── test\                      # flutter test 全量单测（manual 探针已隔离至 test/manual/，默认不跑）
 ├── build-apk.ps1              # gradlew assembleRelease 直连打包（跳过 Dart 编译，慎用）
 ├── build-flutter-apk.ps1      # 完整 flutter build apk --release（推荐）
 ├── pubspec.yaml               # 依赖：web_socket_channel / crypto / flutter_markdown /

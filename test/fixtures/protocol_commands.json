@@ -1,0 +1,27 @@
+{
+  "casCommands": [
+    "applyFileRewind",
+    "deleteQueueItem",
+    "editQueueItem",
+    "editUserQuery",
+    "forkAssistant",
+    "pauseGoal",
+    "reorderQueueItem",
+    "resumeGoal",
+    "retryTurn",
+    "sendQueuedNow",
+    "setAssistantFeedback",
+    "setAutoDrain",
+    "setFollowupMode",
+    "switchCollaborationMode",
+    "switchModelConfig"
+  ],
+  "rowTargetCommands": [
+    "applyFileRewind",
+    "editUserQuery",
+    "forkAssistant",
+    "retryTurn",
+    "setAssistantFeedback"
+  ],
+  "_comment": "协议命令集合快照（T10，2026-09-14）：Dart(lib/protocol/constants.dart) 与 TS(web/src/protocol/constants.ts) 双端必须与此文件一致。任一端增删命令而不更新此快照并同步另一端 → 双端测试同时红。生成口径：集合按字典序排列。"
+}

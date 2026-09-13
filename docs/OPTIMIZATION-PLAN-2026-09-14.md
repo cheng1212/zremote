@@ -67,7 +67,8 @@
 
 ---
 
-### [ ] T1（P0·S）仓库根卫生：三份 .git 归位 + 构建产物出库
+### [x] T1（P0·S）仓库根卫生：三份 .git 归位 + 构建产物出库
+> ✅ **完成（2026-09-14，4121e45）**：两份遗留 .git 先核对（broken 为空仓；develop-clone 的关键提交已在主仓对象库）后压缩归档 `D:\git-remotes\zremote-old-git-20260912.zip`（2.4MB）再删除；构建日志/flag 出库；`.gitignore` 补 `logs/`。
 
 **现状**：根目录并存 3 份 git 目录（主 `.git` 19M + 两个历史遗留共 3.7M）+ 4 个构建日志/flag 文件散落。
 
@@ -82,7 +83,8 @@
 
 ---
 
-### [ ] T2（P0·S）GitHub Actions CI + 测试代理坑流程化（收编审计 B3）
+### [x] T2（P0·S）GitHub Actions CI + 测试代理坑流程化（收编审计 B3）
+> ✅ **完成（2026-09-14，32d57eb）**：`.github/workflows/app-ci.yml`（flutter 3.44.0 analyze+test，web job 随 T10 加回）；`test.sh` 一条命令双绿（no_proxy 流程化）；Actions 实测绿灯（T4/T5 提交均 success）。
 
 **现状**：origin 远端已配，无 CI；测试假失败坑（代理拦截 flutter_tester 回连）靠 AGENTS.md 文字提醒。
 
@@ -117,7 +119,8 @@
 
 ---
 
-### [ ] T3（P0·S）FVM 锁定 SDK 版本
+### [x] T3（P0·S）FVM 锁定 SDK 版本 —— ❌ **评估后拒绝**（见任务内说明）
+> ❌ **拒绝（2026-09-14）**：本机无 fvm，且项目为单机单版本工具链（`D:lutter` 3.44.0 stable，与 zcode app 同链），不存在 T3 要防的"多环境 SDK 漂移"；版本确定性已由 T2 的 CI（`flutter-version: 3.44.0` 写死）兜住。引入 fvm 反而多一套 SDK 副本与脚本改造成本。**版本约束继续由 `sdk: ^3.12.0` + CI 锁版本承担**。
 
 **现状**：`sdk: ^3.12.0` 约束 + `D:\flutter` 单机路径（3.44.0 stable）。
 
@@ -132,7 +135,8 @@
 
 ---
 
-### [ ] T4（P0·S）lint 强化
+### [x] T4（P0·S）lint 强化
+> ✅ **完成（2026-09-14，540ab5a）**：strict-casts + unawaited_futures 落地。strict-casts 抓出 2 处真 dynamic 隐患（chat_page 类型化空列表/键值插值）已修；17 处火忘 Future 全部显式化（1 处 `Map<K,Future>.remove` 判误报加注释 ignore）。strict-inference/raw-types 暂缓（按本任务降级策略）。
 
 **现状**：默认 `flutter_lints`，无 strict 规则。
 
@@ -160,7 +164,8 @@
 
 ---
 
-### [ ] T5（P0·S）manual 探针隔离 + 命名规范化
+### [x] T5（P0·S）manual 探针隔离 + 命名规范化
+> ✅ **完成（2026-09-14，29f94e1）**：25 个探针 `git mv` 至 `test/manual/`（保历史，相似度 92-98%）；`@Tags(['manual'])` + `dart_test.yaml exclude_tags` 实现**默认测试零 skip**（259 全过无噪音）；`test/manual/README.md` 落档跑法与清单。
 
 **现状**：25 个 `manual_*` 测试与真实测试混在 `test/` 根，靠 skip 区分；对新 Agent 是噪音源（41 个文件里 6 成不用跑）。
 
@@ -220,7 +225,8 @@ state/slices/
 
 ---
 
-### [ ] T8（P1·S）flutter_markdown → flutter_markdown_plus 迁移（有现成经验可抄）
+### [x] T8（P1·S）flutter_markdown → flutter_markdown_plus 迁移（有现成经验可抄）
+> ✅ **完成（2026-09-14，06db299）**：pubspec 换 `flutter_markdown_plus: ^1.0.12`（姊妹项目同款）；rows.dart 单点 import 替换；API 差异仅一处——`sizedImageBuilder(config)` → `imageBuilder(uri, title, alt)`（Uri 直传，dynamic 隐患顺带消除）；双绿通过。
 
 **现状**：`flutter_markdown: ^0.7.7` 官方已停更；使用点仅 **`lib/ui/rows.dart` 一个文件**。姊妹项目 zcode app 已完成同款迁移（其 pubspec 注明"flutter_markdown 已停更,迁移至 flutter_markdown_plus"），API 兼容性已被那边验证过。
 
@@ -251,7 +257,8 @@ state/slices/
 
 ---
 
-### [ ] T10（P1·S）协议双端一致性测试（收编审计 A1 + B4）
+### [x] T10（P1·S）协议双端一致性测试（收编审计 A1 + B4）
+> ✅ **完成（2026-09-14）**：**A1 确证为非问题**——两端集合逐项完全一致（CAS 15 项/ROW_TARGET 5 项），"applyFileRewind 重复"实为设计使然（rowTarget 是 casCommands 需 baseLogEpoch 的子集，允许交集）。快照锁落地：`test/fixtures/protocol_commands.json` + Dart 测试 3 项 + web vitest 测试 3 项（web 端测试从零起步首块，`npm test` = vitest run），CI web job 已启用。任一端改集合不同步 → CI 红。
 
 **现状**：TS（web/src/protocol/constants.ts）与 Dart（lib/protocol/constants.dart）的 CAS_COMMANDS / ROW_TARGET_COMMANDS 集合无比对测试，漂移只能靠人眼（审计 A1 疑似已发现一处重复，未确认真重复）。
 

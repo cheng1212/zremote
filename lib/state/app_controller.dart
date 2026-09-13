@@ -1302,9 +1302,15 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
         out.add(t);
         continue;
       }
+      // 本地重命名覆盖优先（同 _mergeIndexIntoTasks，别踩回旧标题）。
+      final override = _titleOverrides['${t['taskId']}'];
       out.add({
         ...t,
-        'title': entry.title.isNotEmpty ? entry.title : t['title'],
+        'title': override is String
+            ? override
+            : entry.title.isNotEmpty
+            ? entry.title
+            : t['title'],
         'phase': entry.phase,
         if (entry.lastActivityAt > 0) 'lastActivityAt': entry.lastActivityAt,
         'lastAssistantPreview': entry.lastAssistantPreview,
@@ -1843,9 +1849,16 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
     for (final entry in index.list) {
       final existing = byId[entry.sessionId];
       if (existing != null) {
+        // 本地重命名覆盖优先：索引还没追上新标题（仍是旧值非空）时，
+        // 不能把用户刚改的名字踩回旧名。
+        final override = _titleOverrides[entry.sessionId];
         byId[entry.sessionId] = {
           ...existing,
-          'title': entry.title.isNotEmpty ? entry.title : existing['title'],
+          'title': override is String
+              ? override
+              : entry.title.isNotEmpty
+              ? entry.title
+              : existing['title'],
           'phase': entry.phase,
           if (entry.lastActivityAt > 0) 'lastActivityAt': entry.lastActivityAt,
           'lastAssistantPreview': entry.lastAssistantPreview,
@@ -1861,7 +1874,11 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
     tasks = _composeVisibleTasks([...ordered, ...byId.values]);
     // 「全部对话」视图同样吃索引流的实时增补——不然运行/空闲永远停在
     // 连接时刻的 bootstrap 快照上（用户报障：对话运行中显示空闲）。
-    allProjectTasks = _composeVisibleAllTasks(allProjectTasks);
+    // 只在用户正看着这个视图时才重组：索引流没有微批、每帧都来，
+    // 整机卡片的全量重建不能在单项目视图里白烧。
+    if (viewingAllProjects) {
+      allProjectTasks = _composeVisibleAllTasks(allProjectTasks);
+    }
     _watchTaskEvents(index.list);
   }
 

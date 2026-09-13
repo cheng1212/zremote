@@ -451,6 +451,18 @@ class _ChatPageState extends State<ChatPage> {
     return AnchorSample(rowId, topY);
   }
 
+  /// 列表索引里该会话的预览文本（无记录/无预览给空串）。
+  /// 用于「伪空」判定：索引有货但行窗口刷不出 → 空态要说真相别误导。
+  String _listedPreviewFor(String sid) {
+    if (sid.isEmpty) return '';
+    for (final t in widget.app.listedTasks) {
+      if ('${t['taskId'] ?? ''}' == sid || '${t['sessionId'] ?? ''}' == sid) {
+        return '${t['lastAssistantPreview'] ?? ''}';
+      }
+    }
+    return '';
+  }
+
   /// 与 `_buildList` 的布局 index 语义**完全同源**的快照：
   /// 流式行摘除后的历史行集合 + 头部槽数量。
   /// itemBuilder 的 `index - headCount → rows[i]` 映射必须与这里一致，
@@ -3892,10 +3904,16 @@ class _ChatPageState extends State<ChatPage> {
 
     final echoStart = thinking != null ? 1 : 0;
     final headCount = echoStart + echoes.length + (failedCard != null ? 1 : 0);
-    // 全空（无行/无回显/无思考/无错误卡）：新会话引导文案，别让用户
-    // 面对一片空白不知道从哪开始。
+    // 全空（无行/无回显/无思考/无错误卡）：区分两种空（2026-09-14 用户报障
+    // 「列表里明明有内容，打开却让我发第一条消息」）。取证结论：桌面端对该
+    // 会话的行窗口返回空（订阅/拉行/重同步全部成功但 0 行），而列表索引里
+    // 预览/总数明明有货——典型于会话正被桌面端占用（另一 agent 在跑）或由
+    // CLI 创建、行流不归远端会话服务。此时"发第一条消息"是误导，改说真相。
     final showEmptyGuide =
         rows0.isEmpty && echoes.isEmpty && thinking == null && failedCard == null;
+    final listedPreview = _listedPreviewFor(_sid ?? sessionId);
+    final phantomEmpty = showEmptyGuide &&
+        ((state?.totalCount ?? 0) > 0 || listedPreview.isNotEmpty);
     // itemCount 与 itemBuilder 闭包必须用**同一份** rows（本 build 的局部
     // 值）。此前闭包里重读 `rows` 字段：翻页/流式摘行让列表在 build 之后
     // 变短，老 itemCount 的 index 就越界（RangeError → 整个滑动失效）。
@@ -3909,16 +3927,25 @@ class _ChatPageState extends State<ChatPage> {
       const SizedBox(height: 4),
       ...headerCells,
       if (showEmptyGuide)
-        const Padding(
-          padding: EdgeInsets.only(top: 48),
+        Padding(
+          padding: const EdgeInsets.only(top: 48),
           child: Center(
             child: Column(
               children: [
-                Icon(Icons.waving_hand_rounded, size: 30, color: ZT.inkFaint),
-                SizedBox(height: 10),
+                Icon(
+                  phantomEmpty
+                      ? Icons.cloud_off_rounded
+                      : Icons.waving_hand_rounded,
+                  size: 30,
+                  color: ZT.inkFaint,
+                ),
+                const SizedBox(height: 10),
                 Text(
-                  '发第一条消息，开始这个会话',
-                  style: TextStyle(fontSize: 13, color: ZT.inkSoft),
+                  phantomEmpty
+                      ? '这个会话的内容暂时刷不出来——它可能正被桌面端使用中。\n点右上角 ↻ 重试，或到桌面端查看。'
+                      : '发第一条消息，开始这个会话',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 13, color: ZT.inkSoft),
                 ),
               ],
             ),

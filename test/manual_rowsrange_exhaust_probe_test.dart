@@ -111,7 +111,7 @@ void main() {
         await sub.dispose();
       }
     } finally {
-      session.dispose();
+      await session.dispose();
     }
   }, timeout: const Timeout(Duration(minutes: 10)));
 }

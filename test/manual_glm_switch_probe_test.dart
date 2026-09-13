@@ -58,7 +58,7 @@ void main() {
       } on Object catch (_) {}
       await sub?.dispose();
       await conv?.dispose();
-      session.dispose();
+      await session.dispose();
     }
   }, timeout: const Timeout(Duration(minutes: 4)));
 
@@ -132,7 +132,7 @@ void main() {
       }
       await sub?.dispose();
       await conv?.dispose();
-      session.dispose();
+      await session.dispose();
     }
   }, timeout: const Timeout(Duration(minutes: 5)));
 }

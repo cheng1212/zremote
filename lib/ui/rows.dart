@@ -63,14 +63,14 @@ void openImageViewer(
     gaplessPlayback: true,
   );
   if (!context.mounted) return;
-  showDialog(
+  unawaited(showDialog(
     context: context,
     barrierColor: Colors.black87,
     builder: (dialogCtx) => GestureDetector(
       onTap: () => Navigator.pop(dialogCtx),
       child: InteractiveViewer(maxScale: 5, child: Center(child: image)),
     ),
-  );
+  ));
 }
 
 /// 多图画廊：左右滑动逐张预览（参考主流 IM 的图片消息查看器）。
@@ -879,7 +879,7 @@ class _AttachmentViewState extends State<AttachmentView> {
     final local = _localBytes;
     if (local != null) {
       _applyBytes(local);
-      _resolveAspect(local);
+      unawaited(_resolveAspect(local));
       return;
     }
     final ref = widget.attachment['ref'] as String?;
@@ -891,7 +891,7 @@ class _AttachmentViewState extends State<AttachmentView> {
     final cached = globalImageCache.get(ref);
     if (cached != null) {
       _applyBytes(cached);
-      _resolveAspect(cached);
+      unawaited(_resolveAspect(cached));
       return;
     }
     try {
@@ -899,7 +899,7 @@ class _AttachmentViewState extends State<AttachmentView> {
       if (mounted && res.bytes.isNotEmpty) {
         _applyBytes(res.bytes);
         globalImageCache.put(ref, res.bytes);
-        _resolveAspect(res.bytes);
+        unawaited(_resolveAspect(res.bytes));
       } else if (mounted) {
         setState(() => _failed = true);
       }

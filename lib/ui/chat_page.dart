@@ -953,6 +953,9 @@ class _ChatPageState extends State<ChatPage> {
       widget.app.log('[chat] 预上传失败 ${f.name}: $e');
       return null;
     } finally {
+      // Map<K,Future>.remove 返回被摘除的 future 本体——它已在上面的
+      // await 链路里被消费过，这里只是从在飞表摘除，属 lint 误伤。
+      // ignore: unawaited_futures
       _attachInflight.remove('$sid|$key');
     }
   }
@@ -2002,7 +2005,7 @@ class _ChatPageState extends State<ChatPage> {
     if (sid == null) return;
     // 取这条用户消息的原文，给编辑重发预填。
     Map<String, dynamic>? row;
-    for (final r in _viewState?.rows ?? const []) {
+    for (final r in _viewState?.rows ?? const <Map<String, dynamic>>[]) {
       if ((r['rowId'] as num?)?.toInt() == rowId) {
         row = r;
         break;
@@ -2134,10 +2137,12 @@ class _ChatPageState extends State<ChatPage> {
       widget.app.log('[chat] 已提交编辑重发');
       _followLocked = false;
       _atBottom = true;
-      _scroll.animateTo(
-        0,
-        duration: const Duration(milliseconds: 220),
-        curve: Curves.easeOut,
+      unawaited(
+        _scroll.animateTo(
+          0,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOut,
+        ),
       );
     } on Object catch (e) {
       if (!mounted) return;
@@ -2261,12 +2266,14 @@ class _ChatPageState extends State<ChatPage> {
       );
       widget.app.log('[chat] 已分叉新会话 $newId');
       if (!mounted) return;
-      Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => ChatPage(
-            app: widget.app,
-            sessionId: newId,
-            title: '${widget.title} · 分叉',
+      unawaited(
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => ChatPage(
+              app: widget.app,
+              sessionId: newId,
+              title: '${widget.title} · 分叉',
+            ),
           ),
         ),
       );
@@ -5113,7 +5120,7 @@ class _UsageCumulative extends StatelessWidget {
             MapEntry(cumulativeKeyLabel('$k.$k2'), _pretty(v2)),
           ));
         } else {
-          rows.add(MapEntry(cumulativeKeyLabel(k), _pretty(v)));
+          rows.add(MapEntry(cumulativeKeyLabel('$k'), _pretty(v)));
         }
       });
     } else if (cumulative != null) {

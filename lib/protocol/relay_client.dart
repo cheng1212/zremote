@@ -97,7 +97,7 @@ class RelayClient {
     final generation = ++_generation;
     await _socketSub?.cancel();
     _socketSub = null;
-    _socket?.sink.close();
+    unawaited(_socket?.sink.close());
     _socket = null;
     _lastPairAckAt = DateTime.now();
     _lastInboundAt = DateTime.now();
@@ -114,7 +114,7 @@ class RelayClient {
       return;
     }
     if (_disposed || generation != _generation) {
-      socket.sink.close();
+      unawaited(socket.sink.close());
       _connectInFlight = false;
       return;
     }
@@ -345,7 +345,7 @@ class RelayClient {
     _reconnectTimer?.cancel();
     _rewaitTimer?.cancel();
     await _socketSub?.cancel();
-    _socket?.sink.close();
+    unawaited(_socket?.sink.close());
     _setState(RelayState.closed);
     await _payloads.close();
   }

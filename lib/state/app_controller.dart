@@ -505,7 +505,7 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
   /// （`session == null`，卡片点击会被 UI 挡掉）。
   Future<void> disconnect({bool silent = false, bool keepShell = false}) async {
     if (!silent) log('[app] 断开连接');
-    _pushSub?.cancel();
+    unawaited(_pushSub?.cancel());
     _pushSub = null;
     if (_onRelayChanged != null) {
       session?.relay.stateListenable.removeListener(_onRelayChanged!);
@@ -2080,7 +2080,7 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
         final shortTitle = tTitle.isNotEmpty
             ? tTitle
             : (id.length > 8 ? id.substring(0, 8) : id);
-        NotificationService.showTaskEvent(
+        unawaited(NotificationService.showTaskEvent(
           id: id.hashCode & 0x7fffffff,
           title: '${event.title} · $shortTitle',
           body: event.body,
@@ -2088,7 +2088,7 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
               ? errorValueText(t['lastError'])
               : null,
           sessionId: id,
-        );
+        ));
       }
     } on Object catch (e) {
       // 轮询失败静默重试（桥抖动/超时），但节流记一条日志——

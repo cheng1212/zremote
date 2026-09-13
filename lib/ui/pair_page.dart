@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -36,7 +38,7 @@ class _PairPageState extends State<PairPage> {
       setState(() => _controller.text = saved);
     }
     // 冷启动自动重连：上次连过就直接连，不用再手动点。
-    _autoConnect();
+    unawaited(_autoConnect());
   }
 
   Future<void> _autoConnect() async {

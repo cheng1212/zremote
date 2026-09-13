@@ -28,6 +28,18 @@ SessionOpenPlan sessionOpenPlan({
     ? SessionOpenPlan.awaitInflight
     : SessionOpenPlan.open;
 
+/// 该不该给用户看「会话订阅失败 / 重试」那张卡。
+///
+/// 判据必须是**真失败**（[chatError] 非空），**不能**用 `chat == null`：
+/// 乐观切换期间用户已经在聊天页里，而切桥/订阅还没走完——那时 `chat` 也是
+/// null，拿它当判据会一进来就闪一屏「订阅失败」（用户实测反馈）。
+/// 有本机历史顶着时不弹卡（页面顶部另给一条可点的重试提示）。
+bool shouldShowChatOpenFailure({
+  required String? chatError,
+  required String? sessionId,
+  required bool hasSnapshot,
+}) => chatError != null && sessionId != null && !hasSnapshot;
+
 /// 按下发送时，「会话就绪」这件事该怎么处理。
 enum SessionReadyPlan {
   /// 已经订上这个会话：直接发，一秒都别等。

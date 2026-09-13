@@ -170,6 +170,13 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
   ConvSubscription? chat;
   bool chatLoading = false;
 
+  /// 打开会话失败的**真实原因**（null = 没失败）。页面据此显示「订阅失败/重试」。
+  ///
+  /// 不能拿 `chat == null` 当失败判据：乐观切换期间用户已经在聊天页里，
+  /// 而切桥/订阅还没走完——那时 `chat` 也是 null，页面就会闪一屏
+  /// 「会话订阅失败」（用户实测反馈）。只有这里非空才算真失败。
+  String? chatError;
+
   /// prepareWorkspace 的 configOptions / slashCommands 缓存。
   Map<String, dynamic> prep = const {};
   List<Map<String, dynamic>> _slashCommands = const [];
@@ -2184,9 +2191,28 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
     );
     if (plan == SessionOpenPlan.awaitInflight) return _opening!;
     final gen = ++_openGen;
+    // 从**这一刻**就算在打开：切桥（对齐项目）也在打开过程里，而它还没走到
+    // `_openSession`。不在这里置位的话，聊天页会看到 "chatLoading=false +
+    // chat=null" 而闪一屏「会话订阅失败」（用户实测反馈）。
+    chatLoading = true;
+    chatError = null;
+    notifyListeners();
     final fut = _asForeground(() => _openSessionAligned(sessionId, gen));
     _opening = fut;
     _openingSid = sessionId;
+    // 失败如实记下来给页面用；同时保持 fut 本身的错误语义（发送路径要 await
+    // 它并据此回显失败），所以这里另挂一个只做记账的监听。
+    unawaited(
+      fut.then<void>(
+        (_) {},
+        onError: (Object e) {
+          if (gen != _openGen) return;
+          chatError = '$e';
+          chatLoading = false;
+          notifyListeners();
+        },
+      ),
+    );
     return fut.whenComplete(() {
       if (identical(_opening, fut)) {
         _opening = null;
@@ -2228,7 +2254,13 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> _openSession(String sessionId, int gen) async {
     final conv = this.conv;
-    if (conv == null) return;
+    if (conv == null) {
+      // 切桥失败已经把 chatError 记下了；这里补一句更好懂的（桥没立起来）。
+      chatError ??= '桥未就绪';
+      chatLoading = false;
+      notifyListeners();
+      return;
+    }
     chatLoading = true;
     _stashChat();
     chat = null;
@@ -2262,6 +2294,7 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
     _stashChat();
     chat = null;
     chatLoading = false;
+    chatError = null;
     notifyListeners();
   }
 
@@ -2340,6 +2373,7 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
   void closeChat() {
     _stashChat();
     chat = null;
+    chatError = null;
     notifyListeners();
   }
 

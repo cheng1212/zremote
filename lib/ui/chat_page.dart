@@ -16,6 +16,7 @@ import 'automations_page.dart';
 import '../state/app_controller.dart';
 import '../state/history_logic.dart';
 import '../state/model_defaults.dart';
+import '../state/session_open_logic.dart';
 import '../theme.dart';
 import 'composer_logic.dart';
 import 'image_cache.dart';
@@ -3436,9 +3437,12 @@ class _ChatPageState extends State<ChatPage> {
                     ),
                   ),
                 )
-              else if (app.chat == null &&
-                  widget.sessionId != null &&
-                  !_onLocalSnapshot)
+              // 只有**真失败**才亮这张卡（判据见 shouldShowChatOpenFailure）。
+              else if (shouldShowChatOpenFailure(
+                chatError: app.chatError,
+                sessionId: widget.sessionId,
+                hasSnapshot: _onLocalSnapshot,
+              ))
                 Expanded(
                   child: Center(
                     child: Column(
@@ -3695,12 +3699,20 @@ class _ChatPageState extends State<ChatPage> {
         Padding(
           padding: const EdgeInsets.only(bottom: 10),
           child: Center(
-            child: Text(
-              widget.app.chatLoading ? '本机记录 · 正在同步…' : '本机记录 · 未连上服务端',
-              style: const TextStyle(
-                fontSize: 11.5,
-                fontWeight: FontWeight.w600,
-                color: ZT.inkFaint,
+            child: GestureDetector(
+              // 真连不上时点一下重试：有本机记录就不弹失败卡，出口留在这里。
+              onTap: widget.app.chatError == null || widget.sessionId == null
+                  ? null
+                  : () => unawaited(widget.app.openSession(widget.sessionId!)),
+              child: Text(
+                widget.app.chatError == null
+                    ? (widget.app.chatLoading ? '本机记录 · 正在同步…' : '本机记录')
+                    : '本机记录 · 连不上服务端，点这里重试',
+                style: TextStyle(
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w600,
+                  color: widget.app.chatError == null ? ZT.inkFaint : ZT.rose,
+                ),
               ),
             ),
           ),

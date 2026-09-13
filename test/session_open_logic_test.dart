@@ -28,6 +28,53 @@ void main() {
     });
   });
 
+  group('shouldShowChatOpenFailure（失败卡的判据）', () {
+    test('真失败且没内容可顶 → 亮卡', () {
+      expect(
+        shouldShowChatOpenFailure(
+          chatError: '订阅超时',
+          sessionId: 's1',
+          hasSnapshot: false,
+        ),
+        isTrue,
+      );
+    });
+
+    test('**没失败就不亮** —— 乐观切换期间 chat 也是 null，不能当失败', () {
+      // 这正是用户报的"刚进去就一屏订阅失败"：切桥还没走完，chatError 为空。
+      expect(
+        shouldShowChatOpenFailure(
+          chatError: null,
+          sessionId: 's1',
+          hasSnapshot: false,
+        ),
+        isFalse,
+      );
+    });
+
+    test('有本机历史顶着 → 不亮卡（顶部另给可点的重试提示）', () {
+      expect(
+        shouldShowChatOpenFailure(
+          chatError: '订阅超时',
+          sessionId: 's1',
+          hasSnapshot: true,
+        ),
+        isFalse,
+      );
+    });
+
+    test('草稿会话（没有 sessionId）→ 不亮卡', () {
+      expect(
+        shouldShowChatOpenFailure(
+          chatError: 'x',
+          sessionId: null,
+          hasSnapshot: false,
+        ),
+        isFalse,
+      );
+    });
+  });
+
   group('sessionReadyPlan（发送前的就绪闸门）', () {
     test('已经订上当前会话 → 立刻发，一秒不等', () {
       expect(

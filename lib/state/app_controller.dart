@@ -800,7 +800,9 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
       // 主列表合并时被错误排重（多端一致性批次）。
       _archivedTaskIds.clear();
       unawaited(loadTasks());
-      unawaited(loadArchivedTasks());
+      // 归档**不在开工作区时拉**：它是跨项目聚合，一次 7 条 RPC（每个项目
+      // 一次 listArchivedTasks），而主列表根本不用它（服务端 listTasks 本
+      // 就只回活跃会话）。等用户真点归档 tab / 硬同步时再 force 拉。
       unawaited(loadPrep());
       unawaited(loadSkills());
     } on Object {
@@ -831,7 +833,6 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
       await _mountWorkspaceStack(key);
       _archivedTaskIds.clear();
       unawaited(loadTasks());
-      unawaited(loadArchivedTasks());
     } on Object catch (e) {
       log('[workspace] 回滚旧工作区失败: $e');
     }
@@ -1224,17 +1225,14 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> _fetchTaskTokens({List<Map<String, dynamic>>? from}) async {
     if (!_backgroundGate('tokens')) return;
     final now = DateTime.now();
-    final targets = [
-      for (final t in (from ?? tasks))
-        if (tokenFetchDue(
-          _taskTokensAt['${t['taskId']}'],
-          // 当前项目列表的 phase 来自 index 合并；全视图（bootstrap）只有
-          // status——两个字段都认，运行中的会话才能吃到 30s 快档。
-          '${t['phase'] ?? t['status'] ?? ''}',
-          now,
-        ))
-          t,
-    ];
+    // 首次补拉按预算限流（列表已按置顶+活跃倒序，先补第一屏看得见的）：
+    // 「全部对话」整机 41 张卡一次全 due = 11 批 RPC 排满通道，
+    // 用户紧接着点会话/下拉刷新都要排在后面。
+    final targets = tokenFetchTargets(
+      from ?? tasks,
+      _taskTokensAt,
+      now: now,
+    );
     var changed = false;
     // 限流：一批最多 4 个在途请求，任务一多也别把桥瞬间的 RPC 打爆。
     for (var i = 0; i < targets.length; i += 4) {
@@ -1908,7 +1906,6 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
     if (viewingAllProjects) {
       allProjectTasks = _composeVisibleAllTasks(allProjectTasks);
     }
-    _watchTaskEvents(index.list);
   }
 
   void refreshFromIndex() {
@@ -1918,7 +1915,26 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
         _tryReleaseLivePhase(id);
       }
     }
+    // 通知的变迁检测必须**逐帧**看：相位可能一闪而过，被微批合并掉就漏报了。
+    final index = indexSub?.state;
+    if (index != null && index.ready) _watchTaskEvents(index.list);
+    // 重组是贵的（整机卡片全量重建 + 排序，默认视图又是最贵的「全部对话」），
+    // 而索引流在流式期间每帧都来——合并成 200ms 一次，且内容没变不通知。
+    // 逐帧 notify 等于让整页 setState 跟着索引帧的频率跑（用户报的"变慢"）。
+    _indexRefreshTimer ??= Timer(_indexRefreshBatch, _applyIndexRefresh);
+  }
+
+  static const _indexRefreshBatch = Duration(milliseconds: 200);
+  Timer? _indexRefreshTimer;
+
+  void _applyIndexRefresh() {
+    _indexRefreshTimer = null;
+    final before = '${cardsSignature(tasks)}#${cardsSignature(allProjectTasks)}';
     _mergeIndexIntoTasks();
+    if ('${cardsSignature(tasks)}#${cardsSignature(allProjectTasks)}' ==
+        before) {
+      return; // 可见内容没变：不通知，整页不重建
+    }
     notifyListeners();
   }
 
@@ -2353,6 +2369,7 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
   void dispose() {
     logsRevision.dispose();
     _pushSub?.cancel();
+    _indexRefreshTimer?.cancel();
     _tokenTicker?.cancel();
     _pollTicker?.cancel();
     WidgetsBinding.instance.removeObserver(this);

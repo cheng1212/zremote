@@ -1,6 +1,66 @@
 /// 任务卡排序纯逻辑：置顶优先，其余按最新活跃在前。无 Flutter 依赖。
 library;
 
+/// 列表「可见内容」签名：索引帧微批之后用它判断值不值得通知。
+///
+/// `_mergeIndexIntoTasks` 会给每张卡新建 map（引用必变），所以只能比值不能
+/// 比引用；内容没变就不 notify —— 否则索引流每来一帧整页 setState 一次。
+/// 只取**会显示在卡片上**的字段：多一个字段就多一次无谓重建，少一个就会
+/// 漏掉真实变化（标题/相位/置顶/活跃时间/待交互/删除）。
+String cardsSignature(List<Map<String, dynamic>> cards) {
+  final b = StringBuffer();
+  for (final t in cards) {
+    b
+      ..write(t['taskId'])
+      ..write('|')
+      ..write(t['title'])
+      ..write('|')
+      ..write(t['phase'] ?? t['status'])
+      ..write('|')
+      ..write(t['pinned'] == true ? 1 : 0)
+      ..write('|')
+      ..write(taskActivityTs(t))
+      ..write('|')
+      ..write(t['pendingInteraction'] != null ? 1 : 0)
+      ..write('|')
+      ..write(t['deleted'] == true ? 1 : 0)
+      ..write('|')
+      ..write('${t['lastAssistantPreview'] ?? ''}'.length)
+      ..write(';');
+  }
+  return b.toString();
+}
+
+/// 这一轮该补拉 token 的卡片。
+///
+/// 过期的都要，但**「从没拉过」的按 [freshBudget] 限流**：进「全部对话」时
+/// 整机 41 张卡一次全 due（`tokenFetchDue` 没拉过必拉），4 个一批就是 11 批
+/// 串行 RPC 排满 channel 队列——用户紧接着点会话、下拉刷新全排在后面
+/// （通道排队实测见 app_controller `_foregroundBusy` 注释）。
+/// 列表已按「置顶+活跃倒序」排好，取前 N 张 = 先补用户第一屏看得见的。
+/// 老卡片的 5min TTL 到期重拉不受此限（那是刷新不是首灌）。
+List<Map<String, dynamic>> tokenFetchTargets(
+  List<Map<String, dynamic>> cards,
+  Map<String, DateTime> fetchedAt, {
+  required DateTime now,
+  int freshBudget = 12,
+}) {
+  final out = <Map<String, dynamic>>[];
+  var fresh = 0;
+  for (final t in cards) {
+    final id = '${t['taskId'] ?? ''}';
+    if (id.isEmpty) continue;
+    final at = fetchedAt[id];
+    if (!tokenFetchDue(at, '${t['phase'] ?? t['status'] ?? ''}', now)) continue;
+    if (at == null) {
+      if (fresh >= freshBudget) continue;
+      fresh += 1;
+    }
+    out.add(t);
+  }
+  return out;
+}
+
 /// 卡片可用的最新时间戳：lastActivityAt > updatedAt > createdAt（毫秒）。
 /// 三者皆缺/非法时给 0（沉底）。
 int taskActivityTs(Map<String, dynamic> t) {

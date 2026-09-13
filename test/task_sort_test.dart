@@ -392,4 +392,108 @@ void main() {
       expect(deleting.length, 3);
     });
   });
+
+  group('cardsSignature（索引帧微批的变化检测）', () {
+    Map<String, dynamic> card(String id, {String phase = 'idle'}) => {
+      'taskId': id,
+      'title': '会话 $id',
+      'phase': phase,
+      'pinned': false,
+      'lastActivityAt': 1000,
+      'lastAssistantPreview': '预览',
+    };
+
+    test('内容相同 → 签名相同（不同 map 实例也算相同）', () {
+      final a = [card('a'), card('b')];
+      final b = [card('a'), card('b')];
+      expect(cardsSignature(a), cardsSignature(b));
+      expect(identical(a[0], b[0]), isFalse); // 确认是比值不是比引用
+    });
+
+    test('可见字段一变 → 签名就变（相位/标题/置顶/活跃时间/预览长度）', () {
+      final base = cardsSignature([card('a')]);
+      expect(cardsSignature([card('a', phase: 'running')]), isNot(base));
+      expect(
+        cardsSignature([
+          {...card('a'), 'title': '改过名'},
+        ]),
+        isNot(base),
+      );
+      expect(
+        cardsSignature([
+          {...card('a'), 'pinned': true},
+        ]),
+        isNot(base),
+      );
+      expect(
+        cardsSignature([
+          {...card('a'), 'lastActivityAt': 2000},
+        ]),
+        isNot(base),
+      );
+      expect(
+        cardsSignature([
+          {...card('a'), 'pendingInteraction': {'x': 1}},
+        ]),
+        isNot(base),
+      );
+      expect(
+        cardsSignature([
+          {...card('a'), 'lastAssistantPreview': '更长的预览内容'},
+        ]),
+        isNot(base),
+      );
+    });
+
+    test('成员增删 → 签名就变（列表本身要通知）', () {
+      expect(
+        cardsSignature([card('a'), card('b')]),
+        isNot(cardsSignature([card('a')])),
+      );
+    });
+  });
+
+  group('tokenFetchTargets（首灌限流）', () {
+    List<Map<String, dynamic>> cards(int n) => [
+      for (var i = 0; i < n; i++)
+        {'taskId': 't$i', 'phase': 'idle'},
+    ];
+    final now = DateTime(2026, 9, 13, 20);
+
+    test('从没拉过的按预算限流，只补列表最前（= 最活跃）的那几张', () {
+      final out = tokenFetchTargets(cards(41), {}, now: now, freshBudget: 12);
+      expect(out.length, 12);
+      expect(out.first['taskId'], 't0');
+      expect(out.last['taskId'], 't11');
+    });
+
+    test('老卡片过期重拉不受预算限制（那是刷新不是首灌）', () {
+      final fetched = <String, DateTime>{
+        for (var i = 0; i < 41; i++) 't$i': now.subtract(const Duration(minutes: 6)),
+      };
+      final out = tokenFetchTargets(cards(41), fetched, now: now);
+      expect(out.length, 41);
+    });
+
+    test('没过期的一个都不拉；运行中 30s 快档照旧', () {
+      final fresh = <String, DateTime>{'t0': now.subtract(const Duration(seconds: 5))};
+      expect(tokenFetchTargets(cards(1), fresh, now: now), isEmpty);
+      final stale = <String, DateTime>{'t0': now.subtract(const Duration(seconds: 31))};
+      expect(
+        tokenFetchTargets([
+          {'taskId': 't0', 'phase': 'running'},
+        ], stale, now: now).length,
+        1,
+      );
+    });
+
+    test('没 id 的卡片跳过（不污染计数）', () {
+      final out = tokenFetchTargets([
+        {'phase': 'idle'},
+        {'taskId': 'ok', 'phase': 'idle'},
+      ], {}, now: now, freshBudget: 1);
+      expect(out.length, 1);
+      expect(out.single['taskId'], 'ok');
+    });
+  });
 }

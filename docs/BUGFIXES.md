@@ -820,3 +820,33 @@
   `attachmentPut` 的 `isCancelled` 取消钩子保留在协议层（已无 UI 入口）。
 - 验证：analyze 0 问题 + 221 测试全过（新增 attachUploadPlan 3 测）。
   待真机验证：拍照/相册两条入口、多发几张图时发送是否顺畅。
+
+### 性能 会话加载变慢：四条默认路径上的重复开销（用户报障，2026-09-13）
+- 背景：用户反馈「会话加载又变慢了」。机制在代码里早有实测记载
+  （`app_controller` `_foregroundBusy` 注释）：桌面端 channel RPC 走**同一个
+  队列**，后台补拉会排在用户操作前面（曾实测「4 个 getTaskTokenUsage 和
+  用户的 subscribeConversationV4 一起等了 5.1s」）。所以「变慢」= 后台 RPC
+  变多了，而今天「服务端为准」那几批新增的开销**全落在默认路径上**
+  （冷启动现在默认进「全部对话」= 最贵的视图）。
+- 四处根因与修法：
+  ① **索引帧逐帧全量重组**（`refreshFromIndex` → `_mergeIndexIntoTasks` →
+     `notifyListeners`）：流式期间索引每帧都来，每帧把整机卡片重建一遍
+     + 整页 setState。修为 **200ms 微批 + `cardsSignature` 变化检测**
+     （可见字段没变不通知）；通知用的相位变迁检测拆出来**仍然逐帧**跑，
+     免得一闪而过的相位被合并掉漏报。
+  ② **token 角标首灌打 41 次 RPC**（`loadAllProjectTasks` →
+     `_fetchTaskTokens(from: allProjectTasks)`）：整机 41 张卡首次全 due
+     （`tokenFetchDue` 没拉过必拉），4 个一批 = 11 批串行。修为
+     `tokenFetchTargets` 纯函数：**没拉过的按预算限流（默认 12 张）**，
+     列表已按置顶+活跃倒序 → 先补第一屏看得见的；过期重拉不受限。
+  ③ **归档在每次开工作区全量扇出**：`_openWorkspace` 无条件
+     `loadArchivedTasks()`，而它是跨项目聚合 = **每个项目一次** RPC（7 条），
+     主列表根本不用它（服务端 listTasks 本就只回活跃会话）。改为**懒加载**：
+     只在用户点归档 tab / 硬同步时 force 拉。
+  ④ **点一下图钉 = 1 次 bootstrap + 7 次 listPinnedTasks**：`_setPinned`
+     在动作后又整机刷一次；而 `setTaskPinned` 本就是乐观的（`_pinOverrides`
+     已写进两张列表 + 失败回滚），这次刷新纯属白烧。删掉。
+- 附带发现（未改，记在这）：`_archivedTaskIds` 是**只写不读**的死状态
+  （7 处写、0 处读）——归档排重实际靠服务端 listTasks 不返归档。
+- 验证：analyze 0 问题 + 228 测试全过（新增 cardsSignature 3 测 +
+  tokenFetchTargets 4 测）。

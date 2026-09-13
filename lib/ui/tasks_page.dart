@@ -155,12 +155,10 @@ class _TasksPageState extends State<TasksPage> {
     final app = widget.app;
     try {
       await app.setTaskPinned('${t['taskId']}', pinned);
-      // 跟着当前数据源刷新——在「全部对话」里刷当前项目的列表是白刷。
-      if (app.viewingAllProjects) {
-        await app.loadAllProjectTasks();
-      } else {
-        await app.loadTasks();
-      }
+      // **不再**跟一次整机刷新：setTaskPinned 是乐观的——`_pinOverrides`
+      // 已经写进两张列表（`_resortLists`），失败会回滚并抛异常。
+      // 而这里的刷新在「全部对话」里等于 1 次 bootstrap + 7 次
+      // listPinnedTasks（置顶缓存刚被作废），点一下图钉的代价大得离谱。
     } on Object catch (e) {
       if (!mounted) return;
       flashMessage(context, pinned ? '置顶失败：$e' : '取消置顶失败：$e', error: true);

@@ -1,7 +1,7 @@
 name: zremote
 description: "ZCode remote chat client — Citrus Morning edition."
 publish_to: 'none'
-version: 0.1.0+1
+version: 0.1.1+2
 
 environment:
   sdk: ^3.12.0
@@ -19,6 +19,7 @@ dependencies:
   shared_preferences: ^2.3.2
   file_picker: ^8.1.2
   image_picker: ^1.1.2
+  package_info_plus: ^8.1.0
   flutter_local_notifications: ^18.0.1
   url_launcher: ^6.3.0
   fl_chart: ^1.2.0

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../app_info.dart';
 import '../protocol/relay_client.dart';
 import '../state/app_controller.dart';
 import '../state/task_filters.dart';
@@ -45,6 +46,10 @@ class _TasksPageState extends State<TasksPage> {
   /// 过的会话没有覆盖，流一丢就永久停在旧状态——用户看到"运行中"其实早
   /// 跑完了。定时轻量对账把漏掉的 phase 纠回来。
   Timer? _reconcileTimer;
+
+  /// 安装包版本标签（抽屉底部的「版本 x.y.z+N」）。只读一次——别每次开抽屉
+  /// 都走一遍平台通道。
+  late final Future<String> _appVersion = appVersionLabel();
 
   @override
   void initState() {
@@ -1312,6 +1317,28 @@ class _TasksPageState extends State<TasksPage> {
                 Navigator.pop(context);
                 // 断开后不再自动跳配对页，换链接全靠这个入口。
                 app.openPairPage();
+              },
+            ),
+            const Divider(color: ZT.line, thickness: 1.2),
+            // 版本号（用户交代）：一眼确认手机上装的是哪一版。读的是安装包
+            // 真实版本（app_info.dart），不是写死的常量；点一下复制，方便
+            // 报问题时报给我。读不到就整行不显示。
+            FutureBuilder<String>(
+              future: _appVersion,
+              builder: (context, snap) {
+                final v = snap.data;
+                if (v == null || v.isEmpty) return const SizedBox.shrink();
+                return _drawerItem(
+                  icon: Icons.info_outline_rounded,
+                  label: '版本 $v',
+                  onTap: () {
+                    Clipboard.setData(ClipboardData(text: v));
+                    Navigator.pop(context);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('已复制版本号 $v')),
+                    );
+                  },
+                );
               },
             ),
           ],

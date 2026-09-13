@@ -1,0 +1,22 @@
+name: app-ci
+on:
+  push:
+    paths: ['lib/**', 'test/**', 'pubspec.yaml', '.github/workflows/app-ci.yml', 'web/src/protocol/**']
+  pull_request:
+    paths: ['lib/**', 'test/**', 'pubspec.yaml', '.github/workflows/app-ci.yml', 'web/src/protocol/**']
+jobs:
+  flutter-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.44.0
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter analyze --no-pub
+      - run: flutter test
+  # web 协议一致性测试（T10）落地后在此追加 web-protocol-test job：
+  # vitest 对比 TS/Dart 两端 CAS 命令集合快照（test/fixtures/cas_commands.json）。

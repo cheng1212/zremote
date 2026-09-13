@@ -171,6 +171,18 @@ powershell -File build-flutter-apk.ps1   # 后台执行，日志 flutter-build.l
   不是「用户收起」——「全部对话」不再过滤 archived；归档 tab 改跨项目聚合
   （逐项目并发 listArchivedTasks，原只查当前桥项目导致 36 vs 个位数的差）。
   探针：test/manual_server_list_audit_test.dart（只读，链接门控）。
+- **2026-09-13 图片流程重构（用户裁定：对齐 D:\zcode-dev 参考端的图片体验）**：
+  ①弹层三入口对齐——「拍照 / 从相册选择图片 / 上传文件(PDF/文档/任意)」（原只有
+  「添加图片（相册）/添加文件」，无拍照；`_OptionRow` 补可选前导图标）；②相册选图从
+  `FilePicker(type: image)`（文件管理器）换成 `image_picker.pickMultiImage`（**系统
+  相册**，照片/影集多选），拍照走 `pickImage(source: camera)`，两者同一落地路径
+  `_addPicked`（XFile → PlatformFile 带字节）；③**去掉上传阶段文案**——原 `_setStage`
+  往回显气泡里写「读取 xx…」「上传 xx 45%」并带「取消」入口，用户明确不要；改为
+  **静默预上传**：选中即 `_kickPreUpload` 传（`_attachRefs` 缓存 ref + `_attachInflight`
+  去重），发送时命中 ref 直接引用、没命中才补传，失败只在发送时如实回显。回显形式
+  （一张一张缩略图）保持不变。复用判定抽纯函数 `attachUploadPlan`（`composer_logic.dart`，
+  ref 是**会话域**的：换会话不复用，必须重传）+3 测试，共 221 全绿。
+  注：`attachmentPut` 的 `isCancelled` 取消钩子保留在协议层（已无 UI 入口）。
 - **待真机验证（接手批次新增）**：⑤切到桌面端没启动过的项目也能正常打开（不再报
   runtime is not running）；⑥切换失败时界面留在原项目而不是"标题新项目 + 旧列表"；
   ⑦「全部对话」能列出所有项目的会话且卡片带所属项目标签、点别的项目的会话能打开；

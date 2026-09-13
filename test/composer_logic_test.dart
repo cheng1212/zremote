@@ -1093,4 +1093,38 @@ void main() {
     });
   });
 
+  group('attachUploadPlan（静默预上传的复用判定）', () {
+    test('同会话已有 ref → 复用，不再传', () {
+      expect(
+        attachUploadPlan(refMatchesSession: true, inflightMatchesSession: false),
+        AttachUploadPlan.reuse,
+      );
+      // 有 ref 且还有一条在飞（用户又选了一次同一张）也照样复用。
+      expect(
+        attachUploadPlan(refMatchesSession: true, inflightMatchesSession: true),
+        AttachUploadPlan.reuse,
+      );
+    });
+
+    test('ref 属于别的会话 → 不复用，现场重传', () {
+      // 附件 ref 是会话域的：A 会话的 ref 拿去 B 会话发是无效引用。
+      expect(
+        attachUploadPlan(
+          refMatchesSession: false,
+          inflightMatchesSession: false,
+        ),
+        AttachUploadPlan.fresh,
+      );
+    });
+
+    test('没 ref 但有一条发往同会话的在飞 → 等它落地', () {
+      expect(
+        attachUploadPlan(
+          refMatchesSession: false,
+          inflightMatchesSession: true,
+        ),
+        AttachUploadPlan.inflight,
+      );
+    });
+  });
 }

@@ -798,3 +798,25 @@
   归档对齐。单项目主列表的 listTasks 服务端本就只回活跃会话，不用动。
   验证：analyze 0 问题 + 218 测试全过。探针入库
   test/manual_server_list_audit_test.dart（ZREMOTE_PROBE_LINK 门控，只读）。
+
+### 改进 图片流程对齐参考端：系统相册 + 静默预上传（用户裁定，2026-09-13）
+- 背景：用户拿 `D:\zcode-dev`（com.zcode.app）的图片流程做参照，指出三项差距：
+  ①入口弹层缺「拍照」（本端只有「添加图片（相册）/添加文件」）；②选图走的是
+  `FilePicker(type: image)` = **文件管理器**，参考端是系统相册（照片/影集多选）；
+  ③**回显里不该出现上传过程**——本端 `_setStage` 会往气泡里写「读取 xx…」
+  「上传 xx 45%」还挂一个「取消」入口，参考端从弹窗到选图到回显全程无提示。
+  用户同时明确：**最终回显形式（一张一张缩略图）保持不变**。
+- 修复：①弹层三入口对齐（拍照/从相册选择图片/上传文件(PDF/文档/任意)，
+  `_OptionRow` 补可选前导图标）；②相册走 `image_picker.pickMultiImage`、
+  拍照走 `pickImage(source: camera)`，两者汇入 `_addPicked`（XFile → PlatformFile
+  带字节，沿用 9 个 / 100MB 上限与超量提示）；③**静默预上传**：选中即
+  `_kickPreUpload` 传（`_attachRefs` 存 ref、`_attachInflight` 去重），发送时
+  命中 ref 直接引用、没命中才现场补传；回显气泡上传期间只显示「发送中」。
+- 关键约束：附件 ref 是**会话域**的——A 会话传的 ref 拿去 B 会话发是无效引用，
+  所以复用必须同时满足「有结果」+「同一个会话」，判定抽纯函数
+  `attachUploadPlan`（composer_logic.dart）并 +3 测试。
+- 边界：草稿会话（`_sid == null`）选图时不预上传（还没有会话可挂），发送建会话
+  后走现场上传；预上传失败不打扰用户（只记 ZLog），发送时会重试并如实回显失败。
+  `attachmentPut` 的 `isCancelled` 取消钩子保留在协议层（已无 UI 入口）。
+- 验证：analyze 0 问题 + 221 测试全过（新增 attachUploadPlan 3 测）。
+  待真机验证：拍照/相册两条入口、多发几张图时发送是否顺畅。

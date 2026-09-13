@@ -691,3 +691,28 @@ bool queueHasDuplicate(List<Map<String, dynamic>> queueItems, String text) {
 
 /// payload 是否带顶层 freeText 开关（控制"其他…"入口是否出现）。
 bool payloadAllowsFreeText(Map payload) => payload['freeText'] == true;
+
+/// 待发附件的上传决策（静默预上传用）。
+enum AttachUploadPlan {
+  /// 已有**同会话**的上传结果：直接引用 ref，不再传一次。
+  reuse,
+
+  /// 正有一条发往同会话的上传在飞：等它落地，别重复传。
+  inflight,
+
+  /// 没传过 / 结果属于别的会话 / 传失败：现在传。
+  fresh,
+}
+
+/// 附件该不该复用已有上传结果。
+///
+/// 附件 ref 是**会话域**的：在 A 会话传的 ref 拿去 B 会话发是无效引用，
+/// 所以「有结果」必须同时「是同一个会话」才能复用；否则退回现场上传。
+AttachUploadPlan attachUploadPlan({
+  required bool refMatchesSession,
+  required bool inflightMatchesSession,
+}) {
+  if (refMatchesSession) return AttachUploadPlan.reuse;
+  if (inflightMatchesSession) return AttachUploadPlan.inflight;
+  return AttachUploadPlan.fresh;
+}

@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 
@@ -76,6 +77,14 @@ class _ChatPageState extends State<ChatPage> {
   /// 回显增删时自增：回显派生缓存的失效钥匙之一。
   int _echoesVersion = 0;
   final _picked = <PlatformFile>[]; // 待发送附件
+  final _picker = ImagePicker(); // 系统相册 / 拍照（对齐参考端的图片流程）
+
+  /// 附件**静默预上传**结果：选中就传，发送时直接引用 ref。key 见 [_attachKey]。
+  /// ref 是会话域的，所以连同 sid 一起存，换会话后不复用（见 attachUploadPlan）。
+  final _attachRefs = <String, ({String sid, Map<String, dynamic> desc})>{};
+
+  /// 在飞的预上传：key = 'sid|附件key'，同会话同附件只会有一条。
+  final _attachInflight = <String, Future<Map<String, dynamic>?>>{};
 
   /// 草稿模式下暂存的模型/思考/模式选择。
   String? _draftModelValue; // provider/model
@@ -576,16 +585,10 @@ class _ChatPageState extends State<ChatPage> {
         await _assertLocalModel(sessionId);
       }
       if (files.isNotEmpty) {
+        // 选中时已静默预上传，这里通常直接命中 ref；没命中的当场补传。
         final uploads = await _prefetchUploads(files, echo);
-        _uploadCancelled = false;
-        final attachments = await _uploadFiles(
-          sessionId,
-          uploads,
-          echo,
-          isCancelled: () => _uploadCancelled,
-        );
+        final attachments = await _uploadFiles(sessionId, uploads);
         echo['attachments'] = attachments;
-        _setStage(echo, '');
         requireAccepted(
           await app.sendText(
             sessionId,
@@ -604,6 +607,10 @@ class _ChatPageState extends State<ChatPage> {
         );
       }
       echo['status'] = 'sent';
+      // 附件已随消息发出，ref 用完即弃（再选同一张图重新传一次）。
+      for (final f in files) {
+        _attachRefs.remove(_attachKey(f));
+      }
       _picked.clear();
       // 送达即清异常标记——列表卡上的"没发出去"要跟着消失。
       widget.app.reportSendIssue(sessionId, '');
@@ -697,74 +704,123 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   /// 读取选中文件并生成本地预览描述：发送中的回显气泡立刻带上字节，
-  /// 上传阶段（还没拿到服务端 ref）也能看到缩略图，不再是干等文案。
+  /// 上传还没拿到 ref 时也能看到缩略图（不再有「上传中」阶段文案）。
   Future<List<(PlatformFile, Uint8List)>> _prefetchUploads(
     List<PlatformFile> files,
     Map<String, Object?> echo,
   ) async {
     final out = <(PlatformFile, Uint8List)>[];
     for (final f in files) {
-      _setStage(echo, '读取 ${f.name}…');
-      final Uint8List bytes;
-      if (f.path != null) {
-        bytes = await File(f.path!).readAsBytes();
-      } else {
-        final b = f.bytes;
-        if (b == null) throw StateError('${f.name}: 文件不可读');
-        bytes = b;
-      }
+      final bytes = await _bytesOf(f);
       // 本地预览也要 mime：无后缀相册图靠魔数，否则网格分区会把它当文件。
-      final localDesc = <String, dynamic>{
-        'fileName': f.name,
-        'mime': _mimeFor(f.extension ?? ''),
-      };
-      if (localDesc['mime'] == 'application/octet-stream') {
-        localDesc['mime'] = sniffImageMime(bytes);
-      }
-      localDesc['bytes'] = bytes;
       echo['attachments'] = <Map<String, dynamic>>[
         ...?echo['attachments'] as List<Map<String, dynamic>>?,
-        localDesc,
+        {'fileName': f.name, 'mime': _mimeOf(f, bytes), 'bytes': bytes},
       ];
       out.add((f, bytes));
     }
     return out;
   }
 
-  /// 上传中途取消的旗标：附件分片边界轮询它（每个 chunk 一个网络往返，
-  /// 延迟天然限频）。置位后 attachmentPut 抛「上传已取消」，echo 标记失败。
-  bool _uploadCancelled = false;
+  /// 附件身份 key：有路径用路径，否则用「名字:大小」（相机来源可能无路径）。
+  static String _attachKey(PlatformFile f) => f.path ?? '${f.name}:${f.size}';
 
-  void _cancelUpload() => _uploadCancelled = true;
+  Future<Uint8List> _bytesOf(PlatformFile f) async {
+    final p = f.path;
+    if (p != null) return File(p).readAsBytes();
+    final b = f.bytes;
+    if (b == null) throw StateError('${f.name}: 文件不可读');
+    return b;
+  }
+
+  /// 扩展名定不出 mime（相册图常见）→ 魔数嗅探兜底，别让图片按
+  /// octet-stream 上传（服务端和回显都会认不出是图）。
+  String _mimeOf(PlatformFile f, Uint8List bytes) {
+    final base = _mimeFor(f.extension ?? '');
+    return base == 'application/octet-stream'
+        ? (sniffImageMime(bytes) ?? base)
+        : base;
+  }
+
+  /// 真传一个附件并记下 ref（含刚上传的图进缓存：回显零等待，不用再
+  /// attachmentRead 拉一遍）。抛异常由调用方决定是静默还是回显。
+  Future<Map<String, dynamic>> _putAttachment(
+    String sid,
+    PlatformFile f,
+    Uint8List bytes,
+  ) async {
+    final desc = await widget.app.attachmentPut(
+      sid,
+      fileName: f.name,
+      mime: _mimeOf(f, bytes),
+      bytes: bytes,
+    );
+    final ref = '${desc['ref'] ?? ''}';
+    if (ref.isNotEmpty) globalImageCache.put(ref, bytes);
+    _attachRefs[_attachKey(f)] = (sid: sid, desc: desc);
+    return desc;
+  }
+
+  /// 选中即传的**静默预上传**：用户看到的就是缩略图直接出现，没有
+  /// 「正在上传 xx%」这类阶段文案（对齐参考端）；发送时直接引用 ref，
+  /// 省掉等待。失败只记日志——发送时会重试一次并走正常失败提示。
+  void _kickPreUpload() {
+    final sid = _sid;
+    if (sid == null) return; // 草稿会话：等 _send 建好会话再传
+    for (final f in _picked) {
+      final key = _attachKey(f);
+      final plan = attachUploadPlan(
+        refMatchesSession: _attachRefs[key]?.sid == sid,
+        inflightMatchesSession: _attachInflight.containsKey('$sid|$key'),
+      );
+      if (plan != AttachUploadPlan.fresh) continue;
+      _attachInflight['$sid|$key'] = _preUploadQuiet(sid, f, key);
+    }
+  }
+
+  Future<Map<String, dynamic>?> _preUploadQuiet(
+    String sid,
+    PlatformFile f,
+    String key,
+  ) async {
+    try {
+      return await _putAttachment(sid, f, await _bytesOf(f));
+    } on Object catch (e) {
+      widget.app.log('[chat] 预上传失败 ${f.name}: $e');
+      return null;
+    } finally {
+      _attachInflight.remove('$sid|$key');
+    }
+  }
+
+  /// 附件从待发条移除：连同预上传结果一起忘掉（在飞的那条拦不住，落地即废）。
+  void _forgetAttachment(PlatformFile f) {
+    _attachRefs.remove(_attachKey(f));
+    _picked.remove(f);
+  }
 
   Future<List<Map<String, dynamic>>> _uploadFiles(
     String sessionId,
     List<(PlatformFile, Uint8List)> uploads,
-    Map<String, Object?> echo, {
-    bool Function()? isCancelled,
-  }) async {
+  ) async {
     final out = <Map<String, dynamic>>[];
     for (final (f, bytes) in uploads) {
-      _setStage(echo, '上传 ${f.name}…');
-      // 扩展名定不出 mime（相册图常见）→ 魔数嗅探兜底，别让图片按
-      // octet-stream 上传（服务端和回显都会认不出是图）。
-      final baseMime = _mimeFor(f.extension ?? '');
-      final mime = baseMime == 'application/octet-stream'
-          ? (sniffImageMime(bytes) ?? baseMime)
-          : baseMime;
-      final desc = await widget.app.attachmentPut(
-        sessionId,
-        fileName: f.name,
-        mime: mime,
-        bytes: bytes,
-        isCancelled: isCancelled,
-        onProgress: (p) =>
-            _setStage(echo, '上传 ${f.name} ${(p * 100).toStringAsFixed(0)}%'),
+      final key = _attachKey(f);
+      final hit = _attachRefs[key];
+      final inflightKey = '$sessionId|$key';
+      final plan = attachUploadPlan(
+        refMatchesSession: hit != null && hit.sid == sessionId,
+        inflightMatchesSession: _attachInflight.containsKey(inflightKey),
       );
-      // 刚上传完的图直接进缓存：回显零等待，不用再 attachmentRead 拉一遍。
-      final ref = '${desc['ref'] ?? ''}';
-      if (ref.isNotEmpty) globalImageCache.put(ref, bytes);
-      out.add(desc);
+      if (plan == AttachUploadPlan.reuse) {
+        out.add(hit!.desc);
+        continue;
+      }
+      // 预上传在飞就等它；它失败了（null）当场补一次，失败要如实回显。
+      final pre = plan == AttachUploadPlan.inflight
+          ? await _attachInflight[inflightKey]
+          : null;
+      out.add(pre ?? await _putAttachment(sessionId, f, bytes));
     }
     return out;
   }
@@ -802,38 +858,67 @@ class _ChatPageState extends State<ChatPage> {
       _flash('文件超过 100 MB，暂不支持发送', error: true);
       return;
     }
-    if (mounted) setState(() => _picked.add(f));
+    if (!mounted) return;
+    setState(() => _picked.add(f));
+    _kickPreUpload();
   }
 
-  /// 相册选图（多选 + 带字节）：与「+」的文件选择分开——图片走系统相册
-  /// 体验远好过文件管理器；无扩展名的相册图靠上传时魔数嗅探兜底。
+  /// 拍照（系统相机）→ 待发条。与相册同一条落地路径。
+  Future<void> _pickCamera() async {
+    if (_sending) return;
+    try {
+      final shot = await _picker.pickImage(source: ImageSource.camera);
+      if (shot == null) return;
+      await _addPicked([shot]);
+    } on Object catch (e) {
+      if (mounted) _flash('拍照失败：$e', error: true);
+    }
+  }
+
+  /// 相册选图（系统相册，多选）：与「上传文件」分开——图片走系统相册的
+  /// 体验远好过文件管理器（对齐参考端的图片流程）。
   Future<void> _pickImage() async {
     if (_sending) return;
-    final res = await FilePicker.platform.pickFiles(
-      type: FileType.image,
-      allowMultiple: true,
-      withData: true,
-    );
-    final picked = res?.files;
-    if (picked == null || picked.isEmpty) return;
+    try {
+      await _addPicked(await _picker.pickMultiImage());
+    } on Object catch (e) {
+      if (mounted) _flash('选图失败：$e', error: true);
+    }
+  }
+
+  /// XFile → 待发条（带字节：缩略图、预上传、失败重试都要用）。
+  /// 同时**立即**静默预上传：选中就传，发送时直接引用 ref。
+  Future<void> _addPicked(List<XFile> picked) async {
+    if (picked.isEmpty) return;
     final room = 9 - _picked.length;
     if (room <= 0) {
       _flash('一次最多带 9 个图片/文件', error: true);
       return;
     }
     final accepted = <PlatformFile>[];
-    for (final f in picked) {
-      if (f.size > 100 << 20) continue;
-      if (accepted.length < room) accepted.add(f);
+    for (final x in picked) {
+      final size = await x.length();
+      if (size > 100 << 20) continue; // 超大的拦在门外，别等 OOM
+      if (accepted.length >= room) break;
+      accepted.add(
+        PlatformFile(
+          name: x.name,
+          path: x.path,
+          size: size,
+          bytes: await x.readAsBytes(),
+        ),
+      );
     }
     if (accepted.isEmpty) {
       _flash('图片超过 100 MB，暂不支持发送', error: true);
       return;
     }
-    if (mounted) setState(() => _picked.addAll(accepted));
+    if (!mounted) return;
+    setState(() => _picked.addAll(accepted));
     if (accepted.length < picked.length) {
       _flash('已加入 ${accepted.length} 张（超限/超量的已跳过）');
     }
+    _kickPreUpload();
   }
 
   Map<String, dynamic>? _draftConfig() {
@@ -2168,7 +2253,19 @@ class _ChatPageState extends State<ChatPage> {
                       shrinkWrap: true,
                       children: [
                         _OptionRow(
-                          option: const {'name': '添加图片（相册）'},
+                          option: const {'name': '拍照'},
+                          icon: Icons.photo_camera_outlined,
+                          selected: false,
+                          accent: ZT.primary,
+                          onTap: () {
+                            Navigator.pop(sheetCtx);
+                            _pickCamera();
+                          },
+                        ),
+                        const SizedBox(height: 6),
+                        _OptionRow(
+                          option: const {'name': '从相册选择图片'},
+                          icon: Icons.photo_library_outlined,
                           selected: false,
                           accent: ZT.primary,
                           onTap: () {
@@ -2176,8 +2273,10 @@ class _ChatPageState extends State<ChatPage> {
                             _pickImage();
                           },
                         ),
+                        const SizedBox(height: 6),
                         _OptionRow(
-                          option: const {'name': '添加文件'},
+                          option: const {'name': '上传文件(PDF/文档/任意)'},
+                          icon: Icons.folder_outlined,
                           selected: false,
                           accent: ZT.primary,
                           onTap: () {
@@ -3637,11 +3736,6 @@ class _ChatPageState extends State<ChatPage> {
                   onRetry: echo['status'] == 'failed'
                       ? () => _retryEcho(echo)
                       : null,
-                  onCancelUpload:
-                      echo['status'] == 'sending' &&
-                          '${echo['stage'] ?? ''}'.startsWith('上传')
-                      ? _cancelUpload
-                      : null,
                   onRetryWithDefault: echo['status'] == 'failed'
                       ? () => unawaited(_retryEchoWithDefault(echo))
                       : null,
@@ -4140,7 +4234,7 @@ class _ChatPageState extends State<ChatPage> {
             if (_picked.isNotEmpty)
               _AttachmentBar(
                 files: _picked,
-                onRemove: (f) => setState(() => _picked.remove(f)),
+                onRemove: (f) => setState(() => _forgetAttachment(f)),
               ),
             // `/` `$` 联想条：整段输入是 token 时出现。
             ValueListenableBuilder<TextEditingValue>(
@@ -4903,8 +4997,6 @@ class _EchoBubble extends StatelessWidget {
   /// 失败时的退路动作：切回首选默认（GLM）再重试。null 不显示。
   final VoidCallback? onRetryWithDefault;
 
-  /// 上传进行中的取消入口：点「取消」中止附件上传（echo 转失败态）。
-  final VoidCallback? onCancelUpload;
   final ConversationV4? transport;
   final String sessionId;
 
@@ -4913,7 +5005,6 @@ class _EchoBubble extends StatelessWidget {
     required this.echo,
     this.onRetry,
     this.onRetryWithDefault,
-    this.onCancelUpload,
     this.transport,
     this.sessionId = '',
   });
@@ -5023,20 +5114,6 @@ class _EchoBubble extends StatelessWidget {
                               fontSize: 10,
                               fontStyle: FontStyle.italic,
                               color: ZT.onInk,
-                            ),
-                          ),
-                        ),
-                      ],
-                      if (onCancelUpload != null) ...[
-                        const SizedBox(width: 6),
-                        GestureDetector(
-                          onTap: onCancelUpload,
-                          child: const Text(
-                            '取消',
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w800,
-                              color: ZT.rose,
                             ),
                           ),
                         ),
@@ -6681,11 +6758,15 @@ class _OptionRow extends StatelessWidget {
   final Color accent;
   final VoidCallback onTap;
 
+  /// 可选前导图标（附件三入口用，对齐参考端的相机/相册/文件夹）。
+  final IconData? icon;
+
   const _OptionRow({
     required this.option,
     required this.selected,
     required this.accent,
     required this.onTap,
+    this.icon,
   });
 
   @override
@@ -6713,6 +6794,10 @@ class _OptionRow extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             child: Row(
               children: [
+                if (icon != null) ...[
+                  Icon(icon, size: 18, color: selected ? accent : ZT.inkSoft),
+                  const SizedBox(width: 10),
+                ],
                 Expanded(
                   child: Text(
                     name,

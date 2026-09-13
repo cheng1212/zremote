@@ -14,6 +14,7 @@ import '../services/notification_service.dart';
 import 'automation_view.dart';
 import 'model_defaults.dart';
 import 'notification_logic.dart';
+import 'session_open_logic.dart';
 import 'task_sort.dart';
 import 'usage_stats.dart';
 
@@ -723,6 +724,7 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
     final oldChat = chat;
     final oldIndex = indexSub;
     final oldConv = conv;
+    _stashChat(); // 拆桥前收一份本机历史，回头进同一个会话能立刻画出来
     chat = null;
     indexSub = null;
     conv = null;
@@ -2125,35 +2127,135 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
 
   // ----------------------------------------------------------------- chat
 
+  /// 正在打开的那个会话（切桥 + 订阅在飞）。并发来的同一个会话直接复用，
+  /// 别发第二条订阅——见 `session_open_logic.dart` 的说明。
+  Future<void>? _opening;
+  String? _openingSid;
+
+  /// 「本机历史」快照：最近看过的几个会话的**最后一份消息行**。
+  ///
+  /// 用户裁定（2026-09-13）：切会话要**立刻有内容**，不要一进去就等服务端
+  /// （实测订阅中位 4ms、撞上排空暴发能到 22.6s）；允许与平板/PC 不一致，
+  /// 要准就下拉刷新。所以切走/断桥前把行留一份，下次进同一个会话先拿它顶上，
+  /// 服务端订阅在后台补、落地后自动换成活的。
+  ///
+  /// 存的是**拷贝**（新 ConversationState + 行列表浅拷贝）：原 state 会随
+  /// 订阅销毁，留着引用等于抱着个已被 dispose 的 ChangeNotifier。只留最近
+  /// [_snapshotKeep] 个——行里挂着图片描述，别囤。
+  final _chatSnapshots = <String, ConversationState>{};
+  static const _snapshotKeep = 3;
+
+  /// 本机历史快照（没有给 null）。只用于**先把内容画出来**，不参与
+  /// 运行状态/发送判定——那些一律以活订阅为准。
+  ConversationState? chatSnapshot(String sessionId) =>
+      _chatSnapshots[sessionId];
+
+  /// 丢掉 `chat` 之前先把它的行收一份下来（切会话/切桥/断开都走这里）。
+  void _stashChat() {
+    final c = chat;
+    if (c == null) return;
+    final st = c.state;
+    if (st.rows.isEmpty) return; // 空会话没什么可顶的
+    _chatSnapshots.remove(c.sessionId);
+    _chatSnapshots[c.sessionId] = ConversationState()
+      ..rows = List<Map<String, dynamic>>.of(st.rows)
+      ..firstRowId = st.firstRowId
+      ..totalCount = st.totalCount;
+    while (_chatSnapshots.length > _snapshotKeep) {
+      _chatSnapshots.remove(_chatSnapshots.keys.first); // 插入序 = 最旧的先走
+    }
+  }
+
   /// 打开已有会话（sessionId == taskId）。
   ///
   /// 这一步就是实测里最慢的 `subscribeConversationV4`（中位 4ms，撞上排空
   /// 暴发能到 22.6s）。它必须独占队列：整段包在 [_asForeground] 里，
   /// 期间后台补拉让路，别让用户的开会话排在我们自己的补拉后面。
-  Future<void> openSession(String sessionId) =>
-      _asForeground(() => _openSession(sessionId));
+  ///
+  /// **乐观切换**（用户裁定 2026-09-13）：调用方（列表点卡片）不再先 await
+  /// 切桥再跳转——那样切桥的几秒里界面毫无反馈，表现为「第一次点不出来、
+  /// 第二次才出来」。现在切桥挪进这里，在后台跟订阅一起做，用户已经在
+  /// 聊天页里了。发送路径用 [ensureSessionReady] 等它。
+  Future<void> openSession(String sessionId) {
+    final plan = sessionOpenPlan(
+      sessionId: sessionId,
+      openingSid: _openingSid,
+    );
+    if (plan == SessionOpenPlan.awaitInflight) return _opening!;
+    final gen = ++_openGen;
+    final fut = _asForeground(() => _openSessionAligned(sessionId, gen));
+    _opening = fut;
+    _openingSid = sessionId;
+    return fut.whenComplete(() {
+      if (identical(_opening, fut)) {
+        _opening = null;
+        _openingSid = null;
+      }
+    });
+  }
 
-  Future<void> _openSession(String sessionId) async {
+  /// 发送前的就绪闸门：没订上就把这次打开等完。
+  Future<void> ensureSessionReady(String sessionId) {
+    final plan = sessionReadyPlan(
+      sessionId: sessionId,
+      chatSid: chat?.sessionId,
+      openingSid: _openingSid,
+    );
+    switch (plan) {
+      case SessionReadyPlan.sendNow:
+        return Future<void>.value();
+      case SessionReadyPlan.awaitInflight:
+        return _opening!;
+      case SessionReadyPlan.openThenSend:
+        return openSession(sessionId);
+    }
+  }
+
+  /// 对齐项目再订阅：「全部对话」里点别的项目的会话，桥得先切过去，
+  /// 否则订阅会打到错的项目上（开不出来或开错）。
+  Future<void> _openSessionAligned(String sessionId, int gen) async {
+    final t = _taskById(sessionId);
+    final ok = await ensureTaskProject(t);
+    if (!ok) throw StateError('这个会话所属的项目现在连不上');
+    await _openSession(sessionId, gen);
+  }
+
+  /// 每次打开自增：并发打开时用它判断"我这次还算不算数"。
+  /// 乐观切换之后并发打开成了常态（点 A 又点 B、重连重试），不作废的话
+  /// 先发的慢请求回来会把 `chat` 覆盖成**上一个会话**，订阅还漏着不释放。
+  int _openGen = 0;
+
+  Future<void> _openSession(String sessionId, int gen) async {
     final conv = this.conv;
     if (conv == null) return;
     chatLoading = true;
+    _stashChat();
     chat = null;
     notifyListeners();
     try {
-      chat = await conv.subscribe(sessionId);
+      final sub = await conv.subscribe(sessionId);
+      if (gen != _openGen) {
+        // 已被更新的那次打开顶掉：结果作废，订阅还回去，别留在桥上。
+        unawaited(sub.dispose());
+        return;
+      }
+      chat = sub;
       chatLoading = false;
       notifyListeners();
       // 权威历史计划异步拉一次：滑出窗口/换设备的计划不再丢。
       unawaited(_loadHistoricalPlan(sessionId));
     } on Object {
-      chatLoading = false;
-      notifyListeners();
+      if (gen == _openGen) {
+        chatLoading = false;
+        notifyListeners();
+      }
       rethrow;
     }
   }
 
   /// 新对话草稿（首条消息触发 createSession）。
   void newDraft() {
+    _stashChat();
     chat = null;
     chatLoading = false;
     notifyListeners();
@@ -2174,6 +2276,7 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   void closeChat() {
+    _stashChat();
     chat = null;
     notifyListeners();
   }

@@ -916,7 +916,7 @@ class _TasksPageState extends State<TasksPage> {
                                 color: selected
                                     ? ZT.lemon.withValues(alpha: 0.4)
                                     : ZT.surface,
-                                onTap: () async {
+                                onTap: () {
                                   if (_manage) {
                                     _toggleSelect(id);
                                     return;
@@ -930,18 +930,11 @@ class _TasksPageState extends State<TasksPage> {
                                     );
                                     return;
                                   }
-                                  // 「全部对话」里点别的项目的会话：先把桥切过去，
-                                  // 否则会拿当前项目的桥去开别人的会话。
-                                  final aligned = await app.ensureTaskProject(t);
-                                  if (!context.mounted) return;
-                                  if (!aligned) {
-                                    flashMessage(
-                                      context,
-                                      '打不开：这个会话所属的项目现在连不上',
-                                      error: true,
-                                    );
-                                    return;
-                                  }
+                                  // **乐观切换**（用户裁定 2026-09-13）：立刻进聊天页，
+                                  // 切桥 + 订阅交给 openSession 在后台做。原来这里先
+                                  // `await ensureTaskProject(t)` 再跳转，切桥的几秒里
+                                  // 界面毫无反馈 —— 用户实测「第一次点不出来、等一会
+                                  // 第二次才出来」。快速切进去发消息是第一需求。
                                   widget.onOpenTask(id, _taskTitle(t));
                                 },
                                 onLongPress: _manage

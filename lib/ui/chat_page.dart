@@ -116,7 +116,18 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
+  /// 活订阅的状态：**行为**（运行中/队列/压缩/发送键）一律以它为准，
+  /// 没有就是不运行——宁可先给发送键，也不要拿旧状态把按钮变成「停止」。
   ConversationState? get _state => widget.app.chat?.state;
+
+  /// 渲染用的状态：活订阅优先，其次**本机历史快照**（用户裁定 2026-09-13：
+  /// 切进来立刻要有内容，不要等服务端；允许与别的端不一致，要准就刷新）。
+  /// 只喂给列表/行查找这类"画出来"的地方，不参与上面的行为判定。
+  ConversationState? get _viewState =>
+      _state ?? widget.app.chatSnapshot(widget.sessionId ?? '');
+
+  /// 正在拿本机历史顶着（活订阅还没落地）：列表顶上给一行诚实提示。
+  bool get _onLocalSnapshot => _state == null && _viewState != null;
 
   /// 当前会话 id：订阅成功后以 app 为准，草稿期落到构造参数。
   String? get _sid => widget.app.chat?.sessionId ?? widget.sessionId;
@@ -220,8 +231,9 @@ class _ChatPageState extends State<ChatPage> {
   int? _anchorOldestRowId;
 
   /// 当前列表最旧行 rowId（rows 首元素；空会话给 null）。
+  /// 用**渲染态**：锚定补偿要跟着屏幕上那份内容走，快照期也一样。
   int? _oldestRowId() {
-    final rows = _state?.rows;
+    final rows = _viewState?.rows;
     if (rows == null || rows.isEmpty) return null;
     return (rows.first['rowId'] as num?)?.toInt();
   }
@@ -492,6 +504,26 @@ class _ChatPageState extends State<ChatPage> {
     final text = _input.text.trim();
     final app = widget.app;
     if ((text.isEmpty && _picked.isEmpty) || _sending) return;
+    // 乐观切换：点进来时切桥/订阅还在后台跑（切桥中途 `conv` 甚至是 null），
+    // 直接发会拿旧桥把消息发到别的项目去、或撞「桥未就绪」。先等它就绪。
+    final want = _sid;
+    if (want != null && widget.sessionId != null) {
+      try {
+        await app.ensureSessionReady(want);
+      } on Object catch (e) {
+        if (!mounted) return;
+        setState(() {
+          _echoes.add({
+            'text': text,
+            'status': 'failed',
+            'error': '打开会话失败：$e',
+          });
+          _echoesVersion++;
+        });
+        return;
+      }
+      if (!mounted) return;
+    }
     if (app.conv == null) {
       setState(() {
         _echoes.add({'text': text, 'status': 'failed', 'error': '桥未就绪，请返回重进'});
@@ -1838,7 +1870,7 @@ class _ChatPageState extends State<ChatPage> {
     if (sid == null) return;
     // 取这条用户消息的原文，给编辑重发预填。
     Map<String, dynamic>? row;
-    for (final r in _state?.rows ?? const []) {
+    for (final r in _viewState?.rows ?? const []) {
       if ((r['rowId'] as num?)?.toInt() == rowId) {
         row = r;
         break;
@@ -3381,7 +3413,9 @@ class _ChatPageState extends State<ChatPage> {
                     }
                   },
                 ),
-              if (app.chatLoading)
+              // 有本机历史顶着就先画内容，别拿转圈挡住用户——切进来能立刻
+              // 看到记录、能马上打字发消息是第一需求（用户裁定 2026-09-13）。
+              if (app.chatLoading && !_onLocalSnapshot)
                 const Expanded(
                   child: Center(
                     child: Column(
@@ -3401,7 +3435,9 @@ class _ChatPageState extends State<ChatPage> {
                     ),
                   ),
                 )
-              else if (app.chat == null && widget.sessionId != null)
+              else if (app.chat == null &&
+                  widget.sessionId != null &&
+                  !_onLocalSnapshot)
                 Expanded(
                   child: Center(
                     child: Column(
@@ -3428,7 +3464,7 @@ class _ChatPageState extends State<ChatPage> {
                 Expanded(
                   child: Stack(
                     children: [
-                      _buildList(state, streamingRow: streamingRow),
+                      _buildList(_viewState, streamingRow: streamingRow),
                       if (_showJump)
                         Positioned(
                           right: 14,
@@ -3643,6 +3679,22 @@ class _ChatPageState extends State<ChatPage> {
         : null;
 
     final headerCells = <Widget>[
+      // 本机历史顶着的时候说清楚：内容可能比别的端旧（用户认可这个代价），
+      // 服务端订阅一落地这行就自己消失。
+      if (_onLocalSnapshot)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: Center(
+            child: Text(
+              widget.app.chatLoading ? '本机记录 · 正在同步…' : '本机记录 · 未连上服务端',
+              style: const TextStyle(
+                fontSize: 11.5,
+                fontWeight: FontWeight.w600,
+                color: ZT.inkFaint,
+              ),
+            ),
+          ),
+        ),
       if (state?.loadingOlder == true)
         const Padding(
           padding: EdgeInsets.only(bottom: 10),

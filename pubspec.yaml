@@ -14,7 +14,8 @@ dependencies:
   cupertino_icons: ^1.0.8
   web_socket_channel: ^3.0.3
   crypto: ^3.0.6
-  flutter_markdown: ^0.7.7
+  # flutter_markdown 已停更,迁移至 flutter_markdown_plus(姊妹项目同款,T8)
+  flutter_markdown_plus: ^1.0.12
   markdown: ^7.2.2
   shared_preferences: ^2.3.2
   file_picker: ^8.1.2

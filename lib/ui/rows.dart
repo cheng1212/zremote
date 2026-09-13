@@ -5,7 +5,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 
 import 'agent_output_theme.dart';
 import 'package:markdown/markdown.dart' as md;
@@ -390,7 +390,7 @@ class _MemoMarkdownState extends State<MemoMarkdown> {
         if (href != null) _launchHref(href);
       },
       builders: {'pre': _CodeBlockBuilder()},
-      sizedImageBuilder: (config) => _MarkdownImage(uri: config.uri),
+      imageBuilder: (uri, _, _) => _MarkdownImage(uri: uri),
       styleSheet: MarkdownStyleSheet(
         p:
             widget.baseStyle ??

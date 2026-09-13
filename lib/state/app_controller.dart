@@ -768,10 +768,15 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
   ///
   /// 整段包在 [_asForeground] 里：切项目期间后台补拉一律让路，
   /// 别让用户的切换排在我们自己的 token 补拉后面（见 `_backgroundGate`）。
-  Future<void> openWorkspace(Map<String, dynamic> w) =>
-      _asForeground(() => _openWorkspace(w));
+  Future<void> openWorkspace(
+    Map<String, dynamic> w, {
+    bool preserveView = false,
+  }) => _asForeground(() => _openWorkspace(w, preserveView: preserveView));
 
-  Future<void> _openWorkspace(Map<String, dynamic> w) async {
+  Future<void> _openWorkspace(
+    Map<String, dynamic> w, {
+    bool preserveView = false,
+  }) async {
     final key = workspaceKeyOf(w);
     // 断开后列表会作为只读快照留在页面上，别让残留点击走到 session! 上。
     if (key == null || openingWorkspace || session == null) return;
@@ -784,7 +789,9 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
       // 桥栈真正立起来之后才认这个工作区：中途失败时标题和列表不会各说各话。
       workspace = w;
       // 切到具体项目就退出「全部对话」视图（数据源回到该项目自己的列表）。
-      viewingAllProjects = false;
+      // preserveView = 跨项目开会话的切桥（ensureTaskProject）：用户只是想
+      // 看那个会话，列表停在「全部对话」别动（多端一致性批次第三批）。
+      if (!preserveView) viewingAllProjects = false;
       _lastWorkspaceKey = key;
       unawaited(_saveLastWorkspaceKey(key));
       openingWorkspace = false;
@@ -862,7 +869,7 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
       final parsed = parseBootstrapTasks(boot['tasks']);
       // 逐项目问一次 listPinnedTasks（该方法 scope 带项目，只能按项目查）。
       final pinnedIds = await _collectPinnedIdsAcrossProjects(parsed);
-      allProjectTasks = _applyPinsAndSort([
+      allProjectTasks = _composeVisibleAllTasks([
         for (final t in parsed)
           if (pinnedIds == null)
             t
@@ -968,7 +975,9 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
     for (final w in workspaces) {
       if (workspaceKeyOf(w) == key || '${w['workspacePath'] ?? ''}' == key) {
         try {
-          await openWorkspace(w);
+          // preserveView：切桥只为订阅那个会话，用户的「全部对话」列表
+          // 视图原样保留——点会话不该被拽进项目分类里。
+          await openWorkspace(w, preserveView: true);
           return true;
         } on Object catch (e) {
           log('[all] 打开目标项目失败: $e');
@@ -1060,6 +1069,10 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
       ..removeWhere((id, _) => sweep.restore.contains(id));
     for (final id in sweep.restore) {
       log('[task] 服务端仍保留 $id，删除未生效——按服务端恢复显示');
+    }
+    if (sweep.restore.isNotEmpty && viewingAllProjects) {
+      // 恢复的会话在「全部对话」数据源里也补回来（那张表只在整拉时重建）。
+      unawaited(loadAllProjectTasks());
     }
     // 置顶记录收敛：服务端已经跟上了本地意图就撤掉记录，
     // 别让一个乐观层长期压着服务端（他端取消置顶时能正常体现出来）。
@@ -1268,6 +1281,55 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
     ];
     return _applyPinsAndSort([
       for (final t in kept)
+        _livePhase['${t['taskId']}'] is String
+            ? {...t, 'phase': _livePhase['${t['taskId']}']}
+            : t,
+    ]);
+  }
+
+  /// 用索引流增补一组卡片（标题/相位/活跃时间/预览/待交互）。
+  /// 只动**已存在**的卡，不造新卡——列表成员一律以服务端列表为准。
+  List<Map<String, dynamic>> _enrichFromIndex(
+    List<Map<String, dynamic>> cards,
+  ) {
+    final index = indexSub?.state;
+    if (index == null || !index.ready) return cards;
+    final byId = {for (final e in index.list) e.sessionId: e};
+    final out = <Map<String, dynamic>>[];
+    for (final t in cards) {
+      final entry = byId['${t['taskId']}'];
+      if (entry == null) {
+        out.add(t);
+        continue;
+      }
+      out.add({
+        ...t,
+        'title': entry.title.isNotEmpty ? entry.title : t['title'],
+        'phase': entry.phase,
+        if (entry.lastActivityAt > 0) 'lastActivityAt': entry.lastActivityAt,
+        'lastAssistantPreview': entry.lastAssistantPreview,
+        'pendingInteraction': entry.pendingInteraction,
+      });
+    }
+    return out;
+  }
+
+  /// 「全部对话」视图的可见合成：删除进行中过滤 + 归档/已删排重 +
+  /// 索引流实时增补 + 打开会话的 phase 覆盖 + 置顶 + 排序。
+  /// 与单项目视图同一条「服务端为准」纪律——此前这个视图吃的是连接
+  /// 时刻的 bootstrap 快照，相位永远停在打开 App 那一刻（用户报障：
+  /// 运行中显示空闲且久不恢复），归档会话也会混进主列表。
+  List<Map<String, dynamic>> _composeVisibleAllTasks(
+    List<Map<String, dynamic>> all,
+  ) {
+    final kept = <Map<String, dynamic>>[
+      for (final t in all)
+        if (!_deletingTasks.containsKey('${t['taskId']}'))
+          if (!_archivedTaskIds.contains('${t['taskId']}'))
+            if (!(t['archived'] == true || t['deleted'] == true)) t,
+    ];
+    return _applyPinsAndSort([
+      for (final t in _enrichFromIndex(kept))
         _livePhase['${t['taskId']}'] is String
             ? {...t, 'phase': _livePhase['${t['taskId']}']}
             : t,
@@ -1797,6 +1859,9 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
       if (t != null) ordered.add(t);
     }
     tasks = _composeVisibleTasks([...ordered, ...byId.values]);
+    // 「全部对话」视图同样吃索引流的实时增补——不然运行/空闲永远停在
+    // 连接时刻的 bootstrap 快照上（用户报障：对话运行中显示空闲）。
+    allProjectTasks = _composeVisibleAllTasks(allProjectTasks);
     _watchTaskEvents(index.list);
   }
 

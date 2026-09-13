@@ -121,7 +121,9 @@ class _StreamingPanelState extends State<_StreamingPanel> {
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(14, 6, 14, 0),
       constraints: BoxConstraints(
-        maxHeight: MediaQuery.sizeOf(context).height * 0.42,
+        // 用户裁定（2026-09-14）：最高只占 1/10 屏——基本当一行「正在
+        // 回复」的进度条用，长输出全靠点开看；绝不能挤压历史阅读。
+        maxHeight: MediaQuery.sizeOf(context).height * 0.10,
       ),
       child: NotificationListener<ScrollNotification>(
         onNotification: _onScrollNotification,

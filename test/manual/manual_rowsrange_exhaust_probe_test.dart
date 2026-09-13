@@ -1,9 +1,12 @@
 // ignore_for_file: avoid_print
+// 探针标签：dart_test.yaml 按此排除，默认 flutter test 不跑本目录。
 // 手动诊断：会话历史翻页链端到端取证（用户报障"加载不完整"）。
 // 循环 loadOlder 直到抽干，核对 rows.length vs totalCount，
 // 记录每轮 firstRowId/返回行数，验证翻页链是否丢失内容。
 // ZREMOTE_PROBE_LINK 门控；ZREMOTE_PROBE_SID 可选指定会话 id，
 // 不指定则取 index 首个（最近活跃）会话。
+@Tags(['manual'])
+library;
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';

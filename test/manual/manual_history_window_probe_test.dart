@@ -1,9 +1,12 @@
 // ignore_for_file: avoid_print
+// 探针标签：dart_test.yaml 按此排除，默认 flutter test 不跑本目录。
 // 手动诊断：会话历史到底能拉多少。
 //   阶段一：扫全部工作区全部会话，打印 rows/totalCount，找出最大的那个；
 //   阶段二：对最大的会话按 App 的真实姿势（loadOlder 默认 limit=60）循环抽干，
 //          打印每轮进账 —— 用来复现"拉不出来 / 停在某处"。
 // ZREMOTE_PROBE_LINK 门控；ZREMOTE_PROBE_MAX 限制阶段一扫描数（默认 60）。
+@Tags(['manual'])
+library;
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';

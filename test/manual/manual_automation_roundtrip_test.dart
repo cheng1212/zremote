@@ -1,6 +1,9 @@
 // ignore_for_file: avoid_print
+// 探针标签：dart_test.yaml 按此排除，默认 flutter test 不跑本目录。
 // 手动诊断：自动化 create→list→setEnabled→delete 安全往返。
 // cron 定在 1 月 1 日且 maxRuns=1，测试期间不会触发执行。
+@Tags(['manual'])
+library;
 import 'dart:convert';
 import 'dart:io';
 

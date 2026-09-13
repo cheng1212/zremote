@@ -1,6 +1,9 @@
 // ignore_for_file: avoid_print
+// 探针标签：dart_test.yaml 按此排除，默认 flutter test 不跑本目录。
 // 手动诊断：新建 NVIDIA 会话并监视其模型字段 150 秒，记录每一次变化。
 // ZREMOTE_PROBE_LINK='<链接>' flutter test test/manual_model_watch_test.dart -r expanded
+@Tags(['manual'])
+library;
 import 'dart:async';
 import 'dart:io';
 

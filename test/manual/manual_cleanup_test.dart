@@ -1,5 +1,8 @@
 // ignore_for_file: avoid_print
+// 探针标签：dart_test.yaml 按此排除，默认 flutter test 不跑本目录。
 // 一次性清理：删除 watch 探针残留的测试会话。
+@Tags(['manual'])
+library;
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';

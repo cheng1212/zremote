@@ -1,5 +1,8 @@
 // ignore_for_file: avoid_print
+// 探针标签：dart_test.yaml 按此排除，默认 flutter test 不跑本目录。
 // 手动诊断：自动化（定时任务）接口形状探测。只读。
+@Tags(['manual'])
+library;
 import 'dart:convert';
 import 'dart:io';
 

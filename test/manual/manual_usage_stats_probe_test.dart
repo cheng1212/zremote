@@ -1,6 +1,9 @@
 // ignore_for_file: avoid_print
+// 探针标签：dart_test.yaml 按此排除，默认 flutter test 不跑本目录。
 // 手动诊断：用量统计（usage-stats）bridge 通道形状探测。只读。
 // 链接从 ZREMOTE_PROBE_LINK 环境变量读，严禁写进代码。
+@Tags(['manual'])
+library;
 import 'dart:convert';
 import 'dart:io';
 

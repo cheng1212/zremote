@@ -1,6 +1,9 @@
 // ignore_for_file: avoid_print
+// 探针标签：dart_test.yaml 按此排除，默认 flutter test 不跑本目录。
 // 手动诊断：服务端清单审计——逐项目点数（活跃/归档）+ bootstrap 整机表比对，
 // 定位「本地会话列表和服务端对不上」的真实数据源差异。只读，无任何写操作。
+@Tags(['manual'])
+library;
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';

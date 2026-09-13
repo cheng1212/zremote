@@ -1,9 +1,12 @@
 // ignore_for_file: avoid_print
+// 探针标签：dart_test.yaml 按此排除，默认 flutter test 不跑本目录。
 // 手动诊断探针：App 真正发的**扁平形状** switchModelConfig {provider, model, thought}
 // 桌面端认不认？挨个试 provider 变体，每次打印 ack + 之后的 config。
 // （前一个探针只试了 runtimeModel 对象形状，全被 proto.invalidPayload 拒了，
 //   没覆盖 App 实际发的那条路。）一次性会话，结束自删。
 // ZREMOTE_PROBE_LINK 门控。
+@Tags(['manual'])
+library;
 import 'dart:convert';
 import 'dart:io';
 

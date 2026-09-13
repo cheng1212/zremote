@@ -1,7 +1,10 @@
 // ignore_for_file: avoid_print
+// 探针标签：dart_test.yaml 按此排除，默认 flutter test 不跑本目录。
 // 手动诊断：bootstrap 的整机任务列表（tasks[]）真实形状 + 跨项目 setTaskPinned 能否走通。
 // 「全部对话」与「跨项目置顶」两个功能都押在这两个答案上；形状未实测前代码按多形态
 // 兜底实现（parseBootstrapTasks），本探针用来在拿到配对链接时把兜底收成实测结论。
+@Tags(['manual'])
+library;
 import 'dart:convert';
 import 'dart:io';
 

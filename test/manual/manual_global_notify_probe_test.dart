@@ -1,7 +1,10 @@
 // ignore_for_file: avoid_print
+// 探针标签：dart_test.yaml 按此排除，默认 flutter test 不跑本目录。
 // 手动诊断：全局任务通知链路实测——listTaskList(workspaceScopes) 是否
 // 在桥通道上可用、返回什么、status 词汇是否如预期（BUG-34 后新增的
 // 跨项目通知轮询押在这个接口上）。ZREMOTE_PROBE_LINK 门控。
+@Tags(['manual'])
+library;
 import 'dart:convert';
 import 'dart:io';
 

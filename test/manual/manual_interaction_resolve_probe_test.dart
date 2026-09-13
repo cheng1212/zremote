@@ -1,4 +1,5 @@
 // ignore_for_file: avoid_print
+// 探针标签：dart_test.yaml 按此排除，默认 flutter test 不跑本目录。
 // 手动诊断：对当前 pending 的 userInput 交互尝试多种 answers 载荷形状，
 // 用服务端返回/accepted 与否反推正确结构。
 //
@@ -7,6 +8,8 @@
 //     flutter test test/manual_interaction_resolve_probe_test.dart
 //
 // 注意：本探针会**真的回答**掉桌面端挂着的那个弹窗（只答第一个命中的）。
+@Tags(['manual'])
+library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';

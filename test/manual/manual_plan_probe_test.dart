@@ -1,5 +1,8 @@
 // ignore_for_file: avoid_print
+// 探针标签：dart_test.yaml 按此排除，默认 flutter test 不跑本目录。
 // 手动诊断：抓计划与文件变更的真实数据形状。
+@Tags(['manual'])
+library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';

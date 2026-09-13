@@ -1,9 +1,12 @@
 // ignore_for_file: avoid_print
+// 探针标签：dart_test.yaml 按此排除，默认 flutter test 不跑本目录。
 // 手动诊断：遍历**所有** workspace，抓 pendingInteractions 的真实结构。
 //
 // 用法：
 //   ZREMOTE_PROBE_LINK="<配对链接>" no_proxy=localhost,127.0.0.1,::1 \
 //     flutter test test/manual_interaction_probe_test.dart
+@Tags(['manual'])
+library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';

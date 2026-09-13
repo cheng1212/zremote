@@ -1,0 +1,3 @@
+# T5（2026-09-14）：manual 探针按标签排除——默认 `flutter test` 只跑真实测试，
+# 探针显式跑法见 test/manual/README.md。
+exclude_tags: manual

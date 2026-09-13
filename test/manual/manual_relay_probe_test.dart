@@ -1,5 +1,8 @@
 // 手动诊断探针：print 就是它的输出方式，忽略 avoid_print。
 // ignore_for_file: avoid_print
+// 探针标签：dart_test.yaml 按此排除，默认 flutter test 不跑本目录。
+@Tags(['manual'])
+library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';

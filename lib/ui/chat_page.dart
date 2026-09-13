@@ -2228,8 +2228,8 @@ class _ChatPageState extends State<ChatPage> {
 
   // ------------------------------------------------------------- insert
 
-  /// 插入弹层：文件/图片、技能、斜杠命令，收拢在一个 + 键里。
-  void _openInsertSheet() {
+  /// 输入区弹层：默认为插入（拍照/相册/文件）；asTools 为工具弹层（技能与斜杠命令）。
+  void _openInsertSheet({bool asTools = false}) {
     final app = widget.app;
     showModalBottomSheet(
       context: context,
@@ -2264,17 +2264,19 @@ class _ChatPageState extends State<ChatPage> {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  const Row(
+                  Row(
                     children: [
                       Icon(
-                        Icons.add_circle_outline_rounded,
+                        asTools
+                            ? Icons.handyman_rounded
+                            : Icons.add_circle_outline_rounded,
                         size: 18,
                         color: ZT.primary,
                       ),
-                      SizedBox(width: 8),
+                      const SizedBox(width: 8),
                       Text(
-                        '插入',
-                        style: TextStyle(
+                        asTools ? '技能与命令' : '插入',
+                        style: const TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w900,
                         ),
@@ -2286,39 +2288,41 @@ class _ChatPageState extends State<ChatPage> {
                     child: ListView(
                       shrinkWrap: true,
                       children: [
-                        _OptionRow(
-                          option: const {'name': '拍照'},
-                          icon: Icons.photo_camera_outlined,
-                          selected: false,
-                          accent: ZT.primary,
-                          onTap: () {
-                            Navigator.pop(sheetCtx);
-                            _pickCamera();
-                          },
-                        ),
-                        const SizedBox(height: 6),
-                        _OptionRow(
-                          option: const {'name': '从相册选择图片'},
-                          icon: Icons.photo_library_outlined,
-                          selected: false,
-                          accent: ZT.primary,
-                          onTap: () {
-                            Navigator.pop(sheetCtx);
-                            _pickImage();
-                          },
-                        ),
-                        const SizedBox(height: 6),
-                        _OptionRow(
-                          option: const {'name': '上传文件(PDF/文档/任意)'},
-                          icon: Icons.folder_outlined,
-                          selected: false,
-                          accent: ZT.primary,
-                          onTap: () {
-                            Navigator.pop(sheetCtx);
-                            _pickFile();
-                          },
-                        ),
-                        if (skills.isNotEmpty) ...[
+                        if (!asTools) ...[
+                          _OptionRow(
+                            option: const {'name': '拍照'},
+                            icon: Icons.photo_camera_outlined,
+                            selected: false,
+                            accent: ZT.primary,
+                            onTap: () {
+                              Navigator.pop(sheetCtx);
+                              _pickCamera();
+                            },
+                          ),
+                          const SizedBox(height: 6),
+                          _OptionRow(
+                            option: const {'name': '从相册选择图片'},
+                            icon: Icons.photo_library_outlined,
+                            selected: false,
+                            accent: ZT.primary,
+                            onTap: () {
+                              Navigator.pop(sheetCtx);
+                              _pickImage();
+                            },
+                          ),
+                          const SizedBox(height: 6),
+                          _OptionRow(
+                            option: const {'name': '上传文件(PDF/文档/任意)'},
+                            icon: Icons.folder_outlined,
+                            selected: false,
+                            accent: ZT.primary,
+                            onTap: () {
+                              Navigator.pop(sheetCtx);
+                              _pickFile();
+                            },
+                          ),
+                        ],
+                        if (asTools && skills.isNotEmpty) ...[
                           const Padding(
                             padding: EdgeInsets.only(top: 12, bottom: 7),
                             child: Text(
@@ -2348,7 +2352,7 @@ class _ChatPageState extends State<ChatPage> {
                             ],
                           ),
                         ],
-                        if (commands.isNotEmpty) ...[
+                        if (asTools && commands.isNotEmpty) ...[
                           const Padding(
                             padding: EdgeInsets.only(top: 12, bottom: 7),
                             child: Text(
@@ -2378,7 +2382,7 @@ class _ChatPageState extends State<ChatPage> {
                             ],
                           ),
                         ],
-                        if (skills.isEmpty && commands.isEmpty)
+                        if (asTools && skills.isEmpty && commands.isEmpty)
                           const Padding(
                             padding: EdgeInsets.symmetric(vertical: 8),
                             child: Text(
@@ -3977,7 +3981,7 @@ class _ChatPageState extends State<ChatPage> {
             icon: Icons.handyman_rounded,
             label: '工具',
             accent: ZT.aqua,
-            onTap: _sending ? null : _openInsertSheet,
+            onTap: _sending ? null : () => _openInsertSheet(asTools: true),
           ),
           _QuickSlot(
             icon: Icons.account_tree_rounded,

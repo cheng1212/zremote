@@ -26,7 +26,7 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
     unawaited(_loadWorkspacePrefs());
     unawaited(_loadSessionModels());
     unawaited(_loadSessionApprovalModes());
-    unawaited(_loadRemovedTaskIds());
+    unawaited(_purgeLegacyRemovedTaskIds());
     unawaited(_loadDrafts());
     // token ticker 生命周期监听延迟初始化，避免测试环境无 binding
   }
@@ -145,9 +145,11 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
   List<Map<String, dynamic>> get listedTasks =>
       viewingAllProjects ? allProjectTasks : tasks;
 
-  /// 已删除任务的墓碑：sessions-index 追上之前，合并时不再复活。
-  /// 持久化：服务端删不掉的坏会话靠它永久隐身，重连也不复活。
-  final _removedTaskIds = <String>{};
+  /// 删除进行中的会话（taskId → 发起时刻）：乐观隐藏层，**只在内存**。
+  /// 删除是双通道 RPC，服务端处理有延迟——期间列表与索引帧合并不得把卡
+  /// 复活。但它不是事实源：对账（`sweepDeletions`）发现服务端仍保留该
+  /// 会话时恢复显示——会话列表以服务端为准（多端一致性批次）。
+  final _deletingTasks = <String, DateTime>{};
 
   /// 重命名后 index 标题滞后时的本地覆盖。
   final _titleOverrides = <String, String>{};
@@ -269,33 +271,21 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  /// 读取持久化的删除墓碑（失败静默，列表最多复活几个幽灵卡）。
-  Future<void> _loadRemovedTaskIds() async {
+  /// 弃用旧版持久化墓碑库（removedTaskIds）：它曾让本机永久隐藏服务端
+  /// 还活着的会话，多端各存一份必然各说各话。删除已改为「进行中 + 对账」
+  /// （见 `_deletingTasks`），列表以服务端为准——启动即弃旧库。
+  Future<void> _purgeLegacyRemovedTaskIds() async {
     try {
       final sp = await SharedPreferences.getInstance();
-      final raw = sp.getString('removedTaskIds');
-      if (raw != null) {
-        final decoded = jsonDecode(raw);
-        if (decoded is List) {
-          _removedTaskIds
-            ..clear()
-            ..addAll([for (final e in decoded) '$e']);
-        }
-      }
+      final legacy = sp.getString('removedTaskIds');
+      if (legacy == null) return;
+      await sp.remove('removedTaskIds');
+      var n = 0;
+      final decoded = jsonDecode(legacy);
+      if (decoded is List) n = decoded.length;
+      log('[task] 已弃用旧持久化墓碑（$n 条）——列表回归服务端权威');
     } on Object catch (e) {
-      log('[task] 删除墓碑读取失败: $e');
-    }
-  }
-
-  Future<void> _saveRemovedTaskIds() async {
-    try {
-      final sp = await SharedPreferences.getInstance();
-      await sp.setString(
-        'removedTaskIds',
-        jsonEncode(_removedTaskIds.toList()),
-      );
-    } on Object catch (e) {
-      log('[task] 删除墓碑写入失败: $e');
+      log('[task] 旧墓碑库清理失败: $e');
     }
   }
 
@@ -515,7 +505,10 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
       _lastPhases.clear();
       _lastWaiting.clear();
       _phaseWatchPrimed = false;
-      // 墓碑不再随断线清空：持久化的删除记录跨重连生效。
+      // 派生缓存全部让位服务端：重连后全量重拉，本地不留任何压在服务端
+      // 上的事实（多端一致性批次）。
+      _deletingTasks.clear();
+      _archivedTaskIds.clear();
       _titleOverrides.clear();
       _taskTokens.clear();
       _taskTokensAt.clear();
@@ -781,6 +774,9 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
       unawaited(_saveLastWorkspaceKey(key));
       openingWorkspace = false;
       notifyListeners();
+      // 归档集合是上个工作区的：不清会把旧项目的会话误判成"已归档"，
+      // 主列表合并时被错误排重（多端一致性批次）。
+      _archivedTaskIds.clear();
       unawaited(loadTasks());
       unawaited(loadArchivedTasks());
       unawaited(loadPrep());
@@ -811,6 +807,7 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> _remountQuietly(String key) async {
     try {
       await _mountWorkspaceStack(key);
+      _archivedTaskIds.clear();
       unawaited(loadTasks());
       unawaited(loadArchivedTasks());
     } on Object catch (e) {
@@ -975,40 +972,79 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
     tasksLoading = true;
     notifyListeners();
     final scope = bridge.scope;
+    Object? listErr;
+    Object? pinErr;
     final results = await Future.wait([
       bridge.channels
           .call(Chan.task, 'listTasks', [
             scope,
           ], timeout: const Duration(seconds: 12))
-          .catchError((Object _) => const []),
+          .catchError((Object e) {
+            listErr = e;
+            return const [];
+          }),
       bridge.channels
           .call(Chan.task, 'listPinnedTasks', [
             scope,
           ], timeout: const Duration(seconds: 12))
-          .catchError((Object _) => const []),
+          .catchError((Object e) {
+            pinErr = e;
+            return const [];
+          }),
     ]);
-    final byId = <String, Map<String, dynamic>>{};
-    final pinnedIds = results[1] is List
+    // 服务端列表没拿到 → 现有列表按「缓存」降级保留，标陈旧并退避重试。
+    // 不能吞成空列表——那在用户眼里就是"会话全没了"（多端一致性批次）。
+    if (listErr != null) {
+      tasksLoading = false;
+      tasksStale = true;
+      notifyListeners();
+      log('[task] listTasks 失败，保留本地缓存稍后重试: $listErr');
+      _scheduleTasksRetry();
+      return;
+    }
+    _taskRetryTimer?.cancel();
+    _taskRetryTimer = null;
+    _taskRetryDelay = const Duration(seconds: 3);
+    tasksStale = false;
+    final list = results[0] is List ? results[0] as List : const [];
+    final pins = results[1];
+    // 置顶列表失败时沿用上次的置顶状态（缓存语义），成功则以服务端为准。
+    final pinnedIds = pinErr == null && pins is List
         ? {
-            for (final t in results[1] as List)
+            for (final t in pins)
               if (t is Map && t['taskId'] != null) '${t['taskId']}',
           }
-        : const <String>{};
-    for (final list in results) {
-      if (list is! List) continue;
-      for (final t in list) {
-        if (t is! Map || t['taskId'] == null) continue;
-        final id = '${t['taskId']}';
-        if (t['archived'] == true || t['deleted'] == true) {
-          byId.remove(id);
-          continue;
-        }
-        byId[id] = {
-          ...?byId[id],
-          ...t.cast<String, dynamic>(),
-          'pinned': pinnedIds.contains(id),
-        };
+        : {
+            for (final t in tasks)
+              if (t['pinned'] == true) '${t['taskId']}',
+          };
+    final byId = <String, Map<String, dynamic>>{};
+    for (final t in list) {
+      if (t is! Map || t['taskId'] == null) continue;
+      final id = '${t['taskId']}';
+      if (t['archived'] == true || t['deleted'] == true) {
+        byId.remove(id);
+        continue;
       }
+      byId[id] = {
+        ...?byId[id],
+        ...t.cast<String, dynamic>(),
+        'pinned': pinnedIds.contains(id),
+      };
+    }
+    // 删除进行中的会话对账（服务端为准，多端一致性批次）：
+    // · 服务端列表已没有 → 确认删干净，摘掉乐观隐藏层；
+    // · 服务端还有且已过宽限期 → 删除没生效（如旧版桌面拒删），恢复显示。
+    final sweep = sweepDeletions(
+      serverIds: byId.keys,
+      deleting: _deletingTasks,
+      now: DateTime.now(),
+    );
+    _deletingTasks
+      ..removeWhere((id, _) => sweep.confirmed.contains(id))
+      ..removeWhere((id, _) => sweep.restore.contains(id));
+    for (final id in sweep.restore) {
+      log('[task] 服务端仍保留 $id，删除未生效——按服务端恢复显示');
     }
     // 置顶记录收敛：服务端已经跟上了本地意图就撤掉记录，
     // 别让一个乐观层长期压着服务端（他端取消置顶时能正常体现出来）。
@@ -1028,6 +1064,24 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
     // 模型批量对账（BUG-07 护栏）：夜间无人值守时桌面端可能把会话批量
     // 刷回欠费基线——列表级就能发现并纠正，不等用户逐个点进聊天页。
     unawaited(reconcileTaskModels());
+  }
+
+  /// 当前列表是否为本地缓存降级（listTasks 失败、尚未从服务端确认）。
+  /// 列表页据此提示「同步中，内容可能滞后」——缓存可用，但要诚实。
+  bool tasksStale = false;
+  Timer? _taskRetryTimer;
+  Duration _taskRetryDelay = const Duration(seconds: 3);
+
+  /// listTasks 失败后的退避重试：3s 起步翻倍，30s 封顶；成功即复位。
+  void _scheduleTasksRetry() {
+    _taskRetryTimer?.cancel();
+    _taskRetryTimer = Timer(_taskRetryDelay, () {
+      _taskRetryDelay *= 2;
+      if (_taskRetryDelay > const Duration(seconds: 30)) {
+        _taskRetryDelay = const Duration(seconds: 30);
+      }
+      unawaited(loadTasks());
+    });
   }
 
   /// 任务卡 token 消耗缓存（taskId → 累计 token）；异步补拉，失败静默。
@@ -1173,13 +1227,13 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
     if (changed) notifyListeners();
   }
 
-  /// 墓碑过滤 + 重命名覆盖 + 打开会话的 phase 权威覆盖 + 本地置顶记录 + 排序。
+  /// 删除进行中过滤 + 重命名覆盖 + 打开会话的 phase 权威覆盖 + 本地置顶记录 + 排序。
   List<Map<String, dynamic>> _composeVisibleTasks(
     List<Map<String, dynamic>> all,
   ) {
     final kept = <Map<String, dynamic>>[
       for (final t in all)
-        if (!_removedTaskIds.contains('${t['taskId']}'))
+        if (!_deletingTasks.containsKey('${t['taskId']}'))
           _titleOverrides['${t['taskId']}'] is String
               ? {...t, 'title': _titleOverrides['${t['taskId']}']}
               : t,
@@ -1367,13 +1421,13 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
     if (changed) notifyListeners();
   }
 
-  /// 删除会话。服务端拒绝（会话已损坏/幽灵卡）也照常从本机隐藏：
-  /// 先重试一次排除桥抖动，再失败就记日志+隐藏——用户点的就是删除，
-  /// 不能让个别坏会话变成永远删不掉的钉子户。墓碑持久化，重连不复活。
+  /// 删除会话。先乐观隐藏（`_deletingTasks`，仅内存），随后双通道删除；
+  /// 之后由 loadTasks 对账：服务端删干净则维持隐藏，服务端仍保留（旧版
+  /// 桌面拒删等）则恢复显示——会话列表以服务端为准，本机不再永久私藏。
   ///
   /// task 通道 deleteTask 只摘任务列表条目；会话本体要再调 agent 通道
   /// deleteSession，否则 sessions-index 还能看见它，别的设备（无本机
-  /// 墓碑）会把它重建出来——这正是"手机删了平板复活"的根因。
+  /// 隐藏层）会把它重建出来——这正是"手机删了平板复活"的根因。
   Future<void> deleteTask(String taskId) async {
     final t = _taskById(taskId);
     // 跨项目直发即可（同 setTaskPinned）：桌面端按参数 workspacePath 路由。
@@ -1405,7 +1459,7 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
     } on Object catch (e) {
       log('[task] 会话本体删除 $taskId 失败（他端索引可能复活）: $e');
     }
-    _removedTaskIds.add(taskId);
+    _deletingTasks[taskId] = DateTime.now();
     _titleOverrides.remove(taskId);
     _livePhase.remove(taskId);
     _sendIssues.remove(taskId);
@@ -1431,7 +1485,11 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
     _archivedTaskIds.remove(taskId);
     _invalidatePinnedCache();
     notifyListeners();
-    await _saveRemovedTaskIds();
+    // 删除对账：给服务端处理留时间，之后拉一次列表核对。服务端仍保留
+    // 的话 sweepDeletions 恢复显示——以服务端为准（多端一致性批次）。
+    Timer(const Duration(seconds: 10), () {
+      if (_deletingTasks.containsKey(taskId)) unawaited(loadTasks());
+    });
   }
 
   // -------------------------------------------------------------- archive

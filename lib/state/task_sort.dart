@@ -152,3 +152,39 @@ List<Map<String, dynamic>> parseBootstrapTasks(Object? raw) {
   }
   return out;
 }
+
+/// 「删除进行中」会话对账的裁决结果。
+class DeletionSweep {
+  /// 服务端列表已无此会话 → 确认删干净（摘乐观隐藏层）。
+  final Set<String> confirmed;
+
+  /// 服务端仍在且已过宽限期 → 删除未生效，恢复显示（以服务端为准）。
+  final Set<String> restore;
+
+  const DeletionSweep({required this.confirmed, required this.restore});
+}
+
+/// 对「删除进行中」的会话做一次服务端对账（多端一致性批次）。
+///
+/// 原则：本机的删除只是乐观意图，不是事实。服务端列表里还看得到的会话，
+/// 宽限期一到就恢复显示——旧版桌面拒删的"钉子户"不再被本机永久私藏。
+/// [deleting] 由调用方按返回值自行摘除，本函数不改入参。
+DeletionSweep sweepDeletions({
+  required Iterable<String> serverIds,
+  required Map<String, DateTime> deleting,
+  required DateTime now,
+  Duration grace = const Duration(seconds: 8),
+}) {
+  final ids = <String>{for (final id in serverIds) id};
+  final confirmed = <String>{};
+  final restore = <String>{};
+  deleting.forEach((id, startedAt) {
+    if (!ids.contains(id)) {
+      confirmed.add(id); // 服务端没有 = 删干净了
+    } else if (now.difference(startedAt) >= grace) {
+      restore.add(id); // 删除被拒/未生效 → 卡片回来
+    }
+    // 未过宽限期：删除 RPC 还在路上，继续隐藏，本轮不裁决。
+  });
+  return DeletionSweep(confirmed: confirmed, restore: restore);
+}

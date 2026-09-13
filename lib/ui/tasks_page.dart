@@ -778,6 +778,34 @@ class _TasksPageState extends State<TasksPage> {
           : Column(
               children: [
                 _connBanner(app),
+                // 服务端列表拉取失败 → 本地缓存降级中。缓存可用但要诚实：
+                // 明确告诉用户"现在看的可能滞后"，正在自动重试。
+                if (app.tasksStale)
+                  Container(
+                    width: double.infinity,
+                    color: ZT.surface,
+                    padding: const EdgeInsets.fromLTRB(14, 5, 14, 5),
+                    child: Row(
+                      children: [
+                        const Icon(
+                          Icons.sync_problem_rounded,
+                          size: 13,
+                          color: ZT.inkSoft,
+                        ),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            '同步中断，列表为本机缓存，正在自动重试',
+                            style: TextStyle(
+                              fontSize: 11.5,
+                              color: ZT.inkSoft,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 _searchBar(),
                 _filterRow(),
                 Expanded(

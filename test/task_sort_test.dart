@@ -344,4 +344,52 @@ void main() {
       expect(const BatchRenameSpec(find: 'x', replace: '').apply('x a x'), 'a');
     });
   });
+
+  group('sweepDeletions（删除进行中 · 服务端对账）', () {
+    final t0 = DateTime(2026, 9, 13, 12);
+    late Map<String, DateTime> deleting;
+    setUp(() {
+      deleting = {
+        'gone': t0.subtract(const Duration(minutes: 5)),
+        'kept': t0.subtract(const Duration(minutes: 5)),
+        'fresh': t0.subtract(const Duration(seconds: 2)),
+      };
+    });
+
+    test('服务端没有 → 立即确认（不限宽限）；服务端还有且过宽限 → 恢复显示', () {
+      final sweep = sweepDeletions(
+        serverIds: ['kept'],
+        deleting: deleting,
+        now: t0,
+      );
+      // 'fresh' 虽刚发起，但服务端已经没有它 = 删得够快，直接确认。
+      expect(sweep.confirmed, {'gone', 'fresh'});
+      expect(sweep.restore, {'kept'});
+    });
+
+    test('未过宽限期的不裁决（RPC 还在路上，继续隐藏）', () {
+      final sweep = sweepDeletions(
+        serverIds: ['kept', 'fresh'],
+        deleting: deleting,
+        now: t0,
+      );
+      expect(sweep.confirmed.contains('fresh'), isFalse);
+      expect(sweep.restore.contains('fresh'), isFalse);
+    });
+
+    test('服务端列表为空 = 全部确认删除（含刚发起的）', () {
+      final sweep = sweepDeletions(
+        serverIds: const <String>[],
+        deleting: deleting,
+        now: t0,
+      );
+      expect(sweep.confirmed, {'gone', 'kept', 'fresh'});
+      expect(sweep.restore, isEmpty);
+    });
+
+    test('不改入参，由调用方按结果自行摘除', () {
+      sweepDeletions(serverIds: const <String>[], deleting: deleting, now: t0);
+      expect(deleting.length, 3);
+    });
+  });
 }

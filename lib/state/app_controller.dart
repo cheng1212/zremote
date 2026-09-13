@@ -1119,7 +1119,7 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> pullLatest() {
     return Future.wait([
       loadTasks(),
-      loadArchivedTasks(),
+      loadArchivedTasks(force: true),
       if (viewingAllProjects) loadAllProjectTasks(),
       indexSub?.forceResync() ?? Future<void>.value(),
     ]);
@@ -1605,8 +1605,11 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
   /// 少一大截（用户报障：服务端归档比本地多很多）。task 通道是 host 级
   /// 服务、按参数里的 workspacePath 路由（跨项目置顶/归档直发早已实证），
   /// 逐项目并发直发合并即可，不切桥。
-  Future<void> loadArchivedTasks() async {
-    if (!_backgroundGate('archived')) return;
+  ///
+  /// [force] = 用户显式动作（点归档 tab/硬同步）：绕过后台闸门直接拉，
+  /// 绝不让用户的等待被静默吞成空列表。
+  Future<void> loadArchivedTasks({bool force = false}) async {
+    if (!force && !_backgroundGate('archived')) return;
     final bridge = this.bridge;
     if (bridge == null) return;
     archivedLoading = true;

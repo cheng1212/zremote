@@ -1927,7 +1927,8 @@ class _TasksPageState extends State<TasksPage> {
       onTap: () {
         setState(() => _filter = f);
         if (f == TaskFilter.archived) {
-          widget.app.loadArchivedTasks();
+          // 用户显式点开归档 tab：绕过后台闸门（被闸门静默吞掉=空列表）。
+          unawaited(widget.app.loadArchivedTasks(force: true));
         }
       },
       child: Container(

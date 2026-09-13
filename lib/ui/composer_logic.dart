@@ -389,6 +389,40 @@ class AnchorStep {
   bool get isNoop => delta.abs() < AnchorMath.minStepPx;
 }
 
+/// 视口顶部（最旧端）可见历史行的采样：行身份 + 视口内位置。
+/// 对应 Telegram 的 `scrollToMessageObject`、tdesktop 的 `ScrollTopState{item, shift}`、
+/// 浏览器 scroll anchoring 的 anchor node——滚动锚定单位是「哪条消息 + 它在哪」，
+/// 不是裸像素偏移。
+class AnchorSample {
+  /// 锚行 rowId。null 表示视口顶不是历史行（头部槽/空列表），不可锚。
+  final int? rowId;
+
+  /// 锚行顶边在视口坐标系的 y（向下为正）。
+  final double topY;
+
+  const AnchorSample(this.rowId, this.topY);
+}
+
+/// 锚行补偿的纯计算：两次采样定一次补偿量。
+///
+/// 方向推导（视口坐标 y 向下为正，reverse 列表 pixels 越大越往历史端）：
+/// - 新端内容长高（新行/流式行）→ 锚行被往上推（topY 变小）→ 返回正值 →
+///   pixels 增大往历史端滚，把锚行钉回原位；
+/// - 历史端内容长高（旧图片解码完成、markdown 重排）→ 锚行被往下推
+///   （topY 变大）→ 返回负值 → pixels 减小往回钉。
+///   旧「总高增量」方案在这种场景返回正值——把用户往历史里推一整个增量，
+///   就是「飘来飘去、一下飘老远」的直接根因；
+/// - 锚行自身长高（顶边不动）→ 0，不补；
+/// - 锚行身份变了（翻页/resync/滑出视口）→ null：重定基线，一分不补。
+abstract final class ViewportAnchor {
+  static double? compensate({required AnchorSample? prev, required AnchorSample next}) {
+    if (prev == null || prev.rowId == null || prev.rowId != next.rowId) {
+      return null;
+    }
+    return prev.topY - next.topY;
+  }
+}
+
 /// 锚定补偿的纯计算：阈值过滤 + 单步上限 + 时长缩放。
 ///
 /// 这些数字是"闪不闪"的关键，单拎出来便于回归——都不做 IO 也不碰

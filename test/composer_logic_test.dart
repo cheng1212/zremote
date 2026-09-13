@@ -761,6 +761,52 @@ void main() {
     });
   });
 
+  group('ViewportAnchor（锚行补偿决策）', () {
+    test('新端长高：锚行被上推 → 正值补偿（pixels 往历史端钉回）', () {
+      final delta = ViewportAnchor.compensate(
+        prev: const AnchorSample(7, 60),
+        next: const AnchorSample(7, 20),
+      );
+      expect(delta, 40);
+    });
+
+    test('历史端长高：锚行被下推 → 负值补偿（往回钉，而非旧方案的误推）', () {
+      final delta = ViewportAnchor.compensate(
+        prev: const AnchorSample(7, 60),
+        next: const AnchorSample(7, 160),
+      );
+      expect(delta, -100);
+    });
+
+    test('锚行自身长高（顶边不动）→ 0', () {
+      final delta = ViewportAnchor.compensate(
+        prev: const AnchorSample(7, 60),
+        next: const AnchorSample(7, 60),
+      );
+      expect(delta, 0);
+    });
+
+    test('锚行身份变了（翻页/resync/滑出）→ null 重定基线不补', () {
+      expect(
+        ViewportAnchor.compensate(
+          prev: const AnchorSample(7, 60),
+          next: const AnchorSample(9, 60),
+        ),
+        isNull,
+      );
+    });
+
+    test('无基线（首帧）→ null', () {
+      expect(
+        ViewportAnchor.compensate(
+          prev: null,
+          next: const AnchorSample(7, 60),
+        ),
+        isNull,
+      );
+    });
+  });
+
   group('FollowLock 翻历史锁存', () {
     test('未锁 + 超过 exitPx → 上锁', () {
       expect(

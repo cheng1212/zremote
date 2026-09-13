@@ -179,6 +179,8 @@ class _ChatPageState extends State<ChatPage> {
         _followLocked = locked;
       });
     }
+    // 锚行基线随滚动实时刷新（注释见 _trackAnchorBaseline）。
+    _trackAnchorBaseline();
   }
 
   bool _showJump = false;
@@ -218,31 +220,23 @@ class _ChatPageState extends State<ChatPage> {
   /// 流式新行别再拽手——松手惯性结束且仍停在底部才恢复自动滚动。
   bool _scrollingByUser = false;
 
-  /// 位置锚定基线：用户滚离底部后，最新端内容（流式长高的行、新追加的
-  /// 行）每长高 G，视口就被往最新端拖 G——这是 reverse 列表的视口漂移，
-  /// 与自动回底无关。对策：按「内容总高增量」反向补偿，把锚定行钉在原地。
-  /// 拖动期间不抢手势，欠账攒着，ScrollEnd 停稳后一次补。
-  bool _anchorReady = false;
+  /// 位置锚定基线：用户滚离底部后，最新端内容（新追加的行、图片解码
+  /// 完成撑高的行）每变一寸，视口就跟着视觉平移——这是 reverse 列表的
+  /// 视口漂移，与自动回底无关。对策：以**视口顶可见历史行**为锚
+  /// （AnchorSample），内容变化前后锚行的视口 y 差就是该补的位移，
+  /// 把锚行钉在原地。业界同构：Telegram scrollToMessageObject、
+  /// tdesktop ScrollTopState、浏览器 scroll anchoring。
+  /// 拖动期间不抢手势，基线跟随滚动实时刷新，欠账只对静止期变化生效。
   String? _anchorSid; // 基线所属会话；换会话即重建基线
-  double _prevContentExtent = 0; // 上一帧 maxScrollExtent + viewportDimension
+  AnchorSample? _anchorSample;
 
-  /// 上次见到的最旧行 rowId：变了 = 行集合被整体换过（快照重同步/窗口
-  /// 迁移，BUG-37）。翻页有纪元标记兜着，但 resync 快照不走翻页——总高
-  /// 增量分不清「最新端长高」和「行集合被换过」，后者补了就是把人往
-  /// 历史端送。结构性变化只重定基线，一分不补。
-  int? _anchorOldestRowId;
-
-  /// 当前列表最旧行 rowId（rows 首元素；空会话给 null）。
-  /// 用**渲染态**：锚定补偿要跟着屏幕上那份内容走，快照期也一样。
-  int? _oldestRowId() {
-    final rows = _viewState?.rows;
-    if (rows == null || rows.isEmpty) return null;
-    return (rows.first['rowId'] as num?)?.toInt();
-  }
-
-  /// 上次见到的 loadOlder 合并纪元：变了=本轮增长来自历史端翻页，
-  /// 不补（BUG-32 自动回拖循环的断环点）。
-  int _prevOlderMergeEpoch = 0;
+  /// 锚定检查三重护栏（纯函数化便于单测）：
+  /// - 翻历史锁存（FollowLock）决定「要不要补」；
+  /// - 锚行身份（ViewportAnchor）决定「补多少/要不要重定基线」；
+  /// - AnchorMath 决定「这一步走多远」。
+  /// 旧方案的「总高增量 + 最旧行 rowId + olderMergeEpoch」三套基线已
+  /// 统一收敛到锚行身份一处：翻页/快照重同步会让视口顶行换人，锚定
+  /// 采样天然识别为「身份变了 → 重定基线不补」（BUG-32/37 同效）。
 
   /// 同帧内待补偿的位移。多个触发源（状态更新、post-frame、滚动回调）
   /// 在同一帧里各算一次增量的话会跳两次——这就是"闪"的直接来源。
@@ -307,58 +301,107 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   /// 锚定检查：只在 post-frame 回调里调用（jumpTo 不能在布局期跑，
-  /// 见 _maybeAutoScroll 的调用点）。内容总高 = maxScrollExtent +
-  /// viewportDimension，用总高而非 extent 本身做增量，键盘弹收这类
-  /// 「视口变、内容不变」的情况会自动抵消成 0，不会误判为内容增长。
+  /// 见 _maybeAutoScroll 的调用点）。
+  ///
+  /// 2026-09-14 重构：补偿依据从「内容总高增量」换成「视口顶锚行的
+  /// 位置差」（ViewportAnchor.compensate）。旧算法把 maxScrollExtent 的
+  /// 每一寸增长都当成新端增长全量补进 pixels——历史端行变高（旧消息
+  /// 图片解码完成、markdown/代码块二次排版）时视口明明纹丝没动，却把
+  /// 用户往历史端推整个增量；配合欠账回放，观感就是「停稳之后页面自己
+  /// 飘走，一下飘老远」。锚行方案下这个场景增量为 0，一分不补。
   void _anchorAgainstGrowth() {
     if (!_scroll.hasClients) return;
     final pos = _scroll.position;
     if (!pos.hasContentDimensions || !pos.hasPixels) return;
-    final contentHeight = pos.maxScrollExtent + pos.viewportDimension;
-    final oldest = _oldestRowId();
-    if (!_anchorReady || _anchorSid != _sid) {
-      _anchorReady = true;
-      _anchorSid = _sid;
-      _anchorOldestRowId = oldest;
-      _prevContentExtent = contentHeight;
-      _coalescedAnchorDelta = 0;
-      _prevOlderMergeEpoch = _state?.olderMergeEpoch ?? 0;
+    final next = _sampleTopRow();
+    if (next == null) return; // 顶部不是历史行/找不到列表：基线不动
+    final prevSample = _anchorSample;
+    _anchorSample = next;
+    if (_anchorSid != _sid) {
+      _anchorSid = _sid; // 换会话：重定基线
       return;
     }
-    // 翻页（loadOlder）在历史端插入行：用户看得见的内容纹丝不动，
-    // 补偿它=把视口往历史里拽（拽近新翻页区→再翻页→再拽，
-    // 没有新消息也会自动回拖整个历史——BUG-32）。见到翻页标记直接
-    // 把基线同步到当前高度，一分钱都不补。
-    final olderEpoch = _state?.olderMergeEpoch ?? 0;
-    if (olderEpoch != _prevOlderMergeEpoch) {
-      _prevOlderMergeEpoch = olderEpoch;
-      _anchorOldestRowId = oldest; // 翻页也换最旧行，基线一起翻篇
-      _prevContentExtent = contentHeight;
-      return;
-    }
-    // 快照重同步/行集合整体替换（BUG-37）：服务端重发的窗口可能和原来
-    // 完全不同，总高增量分不清「最新端长高」还是「行集合被换过」——
-    // 后者按步长去「追」就是持续往历史端滑。最旧行变了 = 结构性变化，
-    // 只重定基线不补偿。
-    if (oldest != _anchorOldestRowId) {
-      _anchorOldestRowId = oldest;
-      _prevContentExtent = contentHeight;
-      _coalescedAnchorDelta = 0;
-      return;
-    }
-    final growth = contentHeight - _prevContentExtent;
-    _prevContentExtent = contentHeight;
-    if (growth <= 0) return;
+    final delta = ViewportAnchor.compensate(prev: prevSample, next: next);
+    if (delta == null || delta.abs() < AnchorMath.minStepPx) return;
     if (_atBottom && !_followLocked) {
       return; // 在底部跟随新内容是既有行为，无需锚定
     }
     if (_scrollingByUser) {
-      // 拖动期间直接跳过补偿、不记欠账——欠账回放会在松手后拉着视口
+      // 拖动期间不补也不记欠账——欠账回放会在松手后拉着视口
       // 飞一段（用户实测"轻轻一滑就飞到计划处"）。规范 §4.3 同款取舍：
       // 每帧几像素漂移不可感知，松手后补偿只对新增长生效。
       return;
     }
-    _queueAnchorGrowth(growth);
+    _queueAnchorGrowth(delta);
+  }
+
+  /// 采样视口顶（最旧端）第一条可见历史行。头部槽（思考指示/回显/错误卡）
+  /// 与尾部槽不锚：头部槽身份不稳（回显发送成功即清场），锚它会引入抖动。
+  /// 找不到可锚行时返回 null，基线保持原样。
+  AnchorSample? _sampleTopRow() {
+    if (!mounted || !_scroll.hasClients) return null;
+    final pos = _scroll.position;
+    if (!pos.hasContentDimensions || !pos.hasPixels) return null;
+    final ctx = pos.context.notificationContext;
+    final viewport = RenderAbstractViewport.of(ctx?.findRenderObject());
+    if (viewport is! RenderBox) return null;
+    RenderSliverMultiBoxAdaptor? sliver;
+    viewport.visitChildren((child) {
+      if (sliver == null && child is RenderSliverMultiBoxAdaptor) {
+        sliver = child;
+      }
+    });
+    final box0 = sliver;
+    if (box0 == null) return null;
+    RenderBox? topChild;
+    var topY = double.infinity;
+    box0.visitChildren((child) {
+      final box = child as RenderBox;
+      final y = box.localToGlobal(Offset.zero, ancestor: viewport).dy;
+      if (y < topY) {
+        topY = y;
+        topChild = box;
+      }
+    });
+    final tc = topChild;
+    if (tc == null || !tc.hasSize) return null;
+    final idx = (tc.parentData as SliverMultiBoxAdaptorParentData).index;
+    if (idx == null) return null;
+    final snap = _layoutIndexSnapshot(_viewState);
+    if (snap == null) return null;
+    final i = idx - snap.headCount;
+    if (i < 0 || i >= snap.rows.length) return null;
+    final rowId = (snap.rows[i]['rowId'] as num?)?.toInt();
+    if (rowId == null) return null;
+    return AnchorSample(rowId, topY);
+  }
+
+  /// 与 `_buildList` 的布局 index 语义**完全同源**的快照：
+  /// 流式行摘除后的历史行集合 + 头部槽数量。
+  /// itemBuilder 的 `index - headCount → rows[i]` 映射必须与这里一致，
+  /// 否则锚行身份会错位到别的消息。
+  ({List<Map<String, dynamic>> rows, int headCount})? _layoutIndexSnapshot(
+    ConversationState? state,
+  ) {
+    if (state == null) return null;
+    final rows0 = state.rows;
+    final streaming = _trailingStreamingRow(state);
+    final extracted = streaming != null &&
+        rows0.isNotEmpty &&
+        identical(rows0.last, streaming);
+    final rows = extracted ? rows0.sublist(0, rows0.length - 1) : rows0;
+    final head = (_thinkingLabel(state, rows0) != null ? 1 : 0) +
+        _visibleEchoes(rows0).length +
+        (state.hasErrorPhase ? 1 : 0);
+    return (rows: rows, headCount: head);
+  }
+
+  /// 滚动期间基线实时跟随：手指/惯性/程序化动画引起的锚行 y 变化全部
+  /// 在这里吞进基线，绝不让它们进补偿——否则停稳后的第一帧会把整个
+  /// 滚动距离当成「内容增量」回放一遍，视口被拽回滚动前。
+  void _trackAnchorBaseline() {
+    final next = _sampleTopRow();
+    if (next != null) _anchorSample = next;
   }
 
   /// 把补偿量累加进本帧的合并桶，帧末统一补一次。
@@ -3826,6 +3869,11 @@ class _ChatPageState extends State<ChatPage> {
         child: ListView.builder(
           controller: _scroll,
           reverse: true,
+          // 默认 250px 的缓存区在几千条历史的会话里频繁 GC/重建，
+          // maxScrollExtent 全靠 dead-reckoning 估算、每修正一次视口就
+          // 跳一下（框架 RenderSliverList 的固有行为，无 scroll anchoring）。
+          // 放大到 ~2.5 屏让翻页往复命中已布局区，估算修正大幅减少。
+          scrollCacheExtent: const ScrollCacheExtent.pixels(1200),
           physics: const AlwaysScrollableScrollPhysics(),
           padding: const EdgeInsets.fromLTRB(14, 8, 14, 10),
           itemCount: itemCount,

@@ -740,6 +740,52 @@
   环还开着；防护断言（hasClients/mounted）要放在**拿 position 之前**，
   放在 hasContentDimensions 判断后面已经晚了。
 
+### BUG-38 聊天记录「飘来飘去、一下飘老远」：锚定补偿方向性缺陷（用户痛点，2026-09-14 换架构根治）
+- 现象：滑动停稳后页面自己飘走；偶发朝历史端弹一大段。此前 BUG-27/28/32/37
+  修的都是单点触发源，本次全量调研后确认还有一个**架构级**根因。
+- 调研（两路 GitHub 源码取证）：Telegram Android `scrollToMessageObject`、
+  tdesktop `ScrollTopState{item, shift}`、Signal `scrollToPositionWithOffset`、
+  Element `ScrollOnNewMessageCallback`、CSS scroll anchoring 规范、Stream Chat
+  Flutter 的 SPL fork + itemKey 锚定。业界共同点：滚动状态锚在
+  **「哪条消息 + 它在视口哪里」**，绝不用裸像素；Flutter 框架没有 scroll
+  anchoring（issue #99158 挂 7 年），`RenderSliverList` 对视口外行高靠
+  dead-reckoning 估算，`maxScrollExtent` 修一次视口跳一次。
+- 根因（总高增量锚定的方向性缺陷）：旧 `_anchorAgainstGrowth` 把
+  `maxScrollExtent + viewportDimension` 的增量一律当「新端增长」补进
+  pixels。但**历史端行变高**（旧消息图片解码完成、markdown/代码块二次
+  排版、卡片高度修正）时，视口内内容纹丝没动、总高却多了 G——旧算法把
+  用户往历史端推整个 G；配合 600px/步的欠账回放，观感即「飘老远」。另一
+  支路：惯性（ballistic）期间 `_scrollingByUser=false`，增量照记，惯性一停
+  欠账一次回放——「飘来飘去」的顿挫感。
+- 修复（自实现 scroll anchoring，不动列表底盘）：
+  ①补偿依据换成**视口顶可见历史行**（`AnchorSample{rowId, topY}`）的
+  位置差（`ViewportAnchor.compensate` 纯函数）：新端长高 → 锚行上推 →
+  正值钉回；历史端长高 → 锚行下推 → **负值**往回钉（旧方案此场景误推
+  正值）；锚行自身长高顶边不动 → 0；身份变了（翻页/resync/滑出）→ null
+  重定基线不补——BUG-32 翻页纪元、BUG-37 最旧行判断两套断补标记统一
+  收敛到「锚行身份」一处，`_layoutIndexSnapshot` 与 itemBuilder 的
+  index→rowId 映射严格同源。
+  ②**基线滚动跟随**（`_trackAnchorBaseline`，挂在 `_onScroll`）：手指/
+  惯性/动画引起的锚行 y 变化全部实时吞进基线，只有「静止期的内容变化」
+  能变成补偿——惯性期间欠账恒为 0，顿挫感来源铲除。
+  ③`scrollCacheExtent` 250→1200（约 2.5 屏）：翻页往复命中已布局区，
+  dead-reckoning 估算修正大幅减少。
+  ④保留已调好的观感层：合并桶、AnchorMath 阈值/单步上限/短动画、
+  FollowLock、AutoFollowMath、手势/弹道保护。
+- 取舍：评估过迁 scrollable_positioned_list（Stream fork 是工业级答案），
+  中高成本且本列表六个已修滚动 bug 需全部重回归；锚行方案同思想、
+  改动局部，选定后者。流式行已出列表（_StreamingPanel），图片行占比小，
+  高度确定性问题（Telegram 的预留槽位方案）暂不需要。
+- 验证：analyze 0 问题 + 255 测试全过（新增 ViewportAnchor 决策 5 测）。
+  待真机回归（用户手机）：①流式输出中上滑看历史→视口钉死；②长会话
+  快速上滑+翻页往复→无飘移；③停在历史区等图片/卡片加载完→视口不动；
+  ④惯性甩动中到达流式消息→停稳后不顿挫。
+- 教训：像素坐标系下「按增量补偿」永远分不清**增量发生在视口哪一侧**，
+  方向性错误比不补更糟；锚定单位必须升级到「内容身份+位置」，这是浏览
+  器 2016 就写进规范、全部主流聊天 App 事实遵循的结论。滚动基线要在
+  **滚动事件里实时跟随**，任何「停稳后结算欠账」的设计都会把用户滚动
+  距离当增量回放。
+
 ### 改进 多端一致性：会话列表以服务端为准（用户裁定，2026-09-13）
 - 背景：用户多端（手机/平板/PC）操作，发现列表互不一致。根源是三个**本地层
   在冒充事实源**：①持久化删除墓碑（`removedTaskIds` 进 SharedPreferences，

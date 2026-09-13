@@ -12,6 +12,7 @@ import '../protocol/relay_client.dart';
 import '../protocol/remote_session.dart';
 import '../services/notification_service.dart';
 import 'automation_view.dart';
+import 'history_logic.dart';
 import 'model_defaults.dart';
 import 'notification_logic.dart';
 import 'session_open_logic.dart';
@@ -2244,6 +2245,9 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
       notifyListeners();
       // 权威历史计划异步拉一次：滑出窗口/换设备的计划不再丢。
       unawaited(_loadHistoricalPlan(sessionId));
+      // 首屏补到 100 条就停（桌面端快照只给 60）——用户裁定：一个会话
+      // 几千条，**不要一进来就全拉**，要看全部得用户自己点「拉取全部」。
+      unawaited(_topUpInitialHistory(sub, gen));
     } on Object {
       if (gen == _openGen) {
         chatLoading = false;
@@ -2259,6 +2263,64 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
     chat = null;
     chatLoading = false;
     notifyListeners();
+  }
+
+  /// 批量拉取历史进行中（列表顶部入口据此显示进度、防重复触发）。
+  bool historyPulling = false;
+
+  /// 首屏补历史：订阅快照默认只有 60 行，补到 [kInitialHistoryRows] 就停。
+  /// 补不动也不影响使用（进来就能看能发），失败只记日志。
+  Future<void> _topUpInitialHistory(ConvSubscription sub, int gen) async {
+    final st = sub.state;
+    final want = kInitialHistoryRows - st.rows.length;
+    if (!st.hasMoreOlder || want <= 0) return;
+    try {
+      await sub.loadOlder(limit: want);
+      if (gen == _openGen) notifyListeners();
+    } on Object catch (e) {
+      log('[app] 首屏补历史失败: $e');
+    }
+  }
+
+  /// 拉取整个会话历史（**用户显式动作**，用户裁定 2026-09-13）。
+  ///
+  /// 探针实测：快照给 60 行、`totalCount` 是整个会话（例：4083 行），
+  /// 翻页一轮一页。所以"要看全部"是一次几十轮的循环——不能自动做，
+  /// 得用户点。先试大页（[kHistoryBulkPageSize]），一轮 0 进账就退回
+  /// 小页（实测 limit=300 桌面端会一轮不给），仍无进展就收手。
+  Future<void> pullAllHistory() async {
+    final sub = chat;
+    if (sub == null || historyPulling) return;
+    final st = sub.state;
+    historyPulling = true;
+    notifyListeners();
+    var last = st.rows.length;
+    var stall = 0;
+    try {
+      while (shouldKeepPulling(
+        hasMoreOlder: st.hasMoreOlder,
+        loaded: st.rows.length,
+        lastLoaded: last,
+        stallRounds: stall,
+      )) {
+        await sub.loadOlder(
+          limit: stall == 0 ? kHistoryBulkPageSize : kHistoryPageSize,
+        );
+        if (st.rows.length <= last) {
+          stall++;
+        } else {
+          stall = 0;
+          last = st.rows.length;
+        }
+        notifyListeners(); // 进度：列表顶部显示 已加载/总数
+      }
+      log('[app] 历史拉取结束 ${st.rows.length}/${st.totalCount}');
+    } on Object catch (e) {
+      log('[app] 历史拉取中断: $e');
+    } finally {
+      historyPulling = false;
+      notifyListeners();
+    }
   }
 
   Future<void> _loadHistoricalPlan(String sessionId) async {

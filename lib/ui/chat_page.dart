@@ -14,6 +14,7 @@ import '../state/activity_view.dart';
 import '../state/automation_view.dart';
 import 'automations_page.dart';
 import '../state/app_controller.dart';
+import '../state/history_logic.dart';
 import '../state/model_defaults.dart';
 import '../theme.dart';
 import 'composer_logic.dart';
@@ -3678,6 +3679,15 @@ class _ChatPageState extends State<ChatPage> {
           )
         : null;
 
+    // 「还有 N 条更早 · 拉取全部」文案（空 = 已抽干，不显示入口）。
+    final historyLabel = state == null
+        ? ''
+        : historyPullLabel(
+            loaded: state.rows.length,
+            total: state.totalCount,
+            pulling: widget.app.historyPulling,
+          );
+
     final headerCells = <Widget>[
       // 本机历史顶着的时候说清楚：内容可能比别的端旧（用户认可这个代价），
       // 服务端订阅一落地这行就自己消失。
@@ -3691,6 +3701,40 @@ class _ChatPageState extends State<ChatPage> {
                 fontSize: 11.5,
                 fontWeight: FontWeight.w600,
                 color: ZT.inkFaint,
+              ),
+            ),
+          ),
+        ),
+      // 还有更早的没拉进来：给一个**显式**入口（用户裁定：一个会话几千条，
+      // 不要一进来就全拉，要看全部自己点）。上滑翻页照旧一页一页来。
+      if (historyLabel.isNotEmpty)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: Center(
+            child: GestureDetector(
+              onTap: widget.app.historyPulling
+                  ? null
+                  : () => unawaited(widget.app.pullAllHistory()),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 7,
+                ),
+                decoration: ShapeDecoration(
+                  color: ZT.bg,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(999),
+                    side: ZT.inkSide(w: 1, color: ZT.line),
+                  ),
+                ),
+                child: Text(
+                  historyLabel,
+                  style: const TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w700,
+                    color: ZT.inkSoft,
+                  ),
+                ),
               ),
             ),
           ),

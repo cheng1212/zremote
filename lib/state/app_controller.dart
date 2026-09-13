@@ -141,6 +141,11 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
   /// 列表页当前是否处于「全部对话」视图。
   bool viewingAllProjects = false;
 
+  /// 冷启动默认进「全部对话」（用户裁定：每次进来显示全部会话）。
+  /// 只在配对页发起的全新连接里消费一次；之后用户手动进项目、就地
+  /// 重连（keepShell）都不再强制，尊重当前视图。
+  bool _openAllProjectsOnConnect = true;
+
   /// 列表页真正展示的数据源：单项目视图 / 全部对话视图的**唯一分岔点**。
   List<Map<String, dynamic>> get listedTasks =>
       viewingAllProjects ? allProjectTasks : tasks;
@@ -431,6 +436,14 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
       if (picked != null) {
         await openWorkspace(picked);
       }
+      // 冷启动默认进「全部对话」：bootstrap 已带回整机任务列表（上面
+      // 408 行），切视图零开销。只对配对页发起的全新连接生效——就地
+      // 重连（keepShell）不动用户当前视图；标记只消费一次。
+      if (_openAllProjectsOnConnect && !keepShell) {
+        _openAllProjectsOnConnect = false;
+        viewingAllProjects = true;
+        notifyListeners();
+      }
     } on Object catch (e) {
       connecting = false;
       failure = '$e';
@@ -506,10 +519,12 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
       _lastWaiting.clear();
       _phaseWatchPrimed = false;
       // 派生缓存全部让位服务端：重连后全量重拉，本地不留任何压在服务端
-      // 上的事实（多端一致性批次）。
+      // 上的事实（多端一致性批次）。彻底断开 = 下次连接是全新进入，
+      // 冷启动「全部对话」默认重新生效。
       _deletingTasks.clear();
       _archivedTaskIds.clear();
       _titleOverrides.clear();
+      _openAllProjectsOnConnect = true;
       _taskTokens.clear();
       _taskTokensAt.clear();
       _tokenSampleLogged = false;

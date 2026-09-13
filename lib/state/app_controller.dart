@@ -1394,7 +1394,12 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
     };
   }
 
-  Map<String, dynamic> _taskById(String taskId) {
+  /// 查不到给 null（不抛）。**打开会话必须用这个**：刚 createSession 出来的
+  /// 新会话此刻不在任何列表里、索引帧也还没到，查不到是正常状态——那时桥
+  /// 本来就是对的（会话刚在当前桥上建的），不该因此把首条消息打回去。
+  /// （回归记录：`_openSessionAligned` 用了会抛的 `_taskById`，导致
+  /// 「新会话第一条消息总是发不出去 / Bad state: 任务不存在」。）
+  Map<String, dynamic>? _taskByIdOrNull(String taskId) {
     for (final t in tasks) {
       if ('${t['taskId']}' == taskId) return t;
     }
@@ -1410,8 +1415,13 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
     if (indexSub?.state.sessions.containsKey(taskId) == true) {
       return {'taskId': taskId};
     }
-    throw StateError('任务不存在: $taskId');
+    return null;
   }
+
+  /// 查不到就抛：重命名/置顶/归档这类**必须知道会话属于哪个项目**的操作，
+  /// 拿不准 scope 会把请求打到错的项目上（服务端静默拒绝或改错库）。
+  Map<String, dynamic> _taskById(String taskId) =>
+      _taskByIdOrNull(taskId) ?? (throw StateError('任务不存在: $taskId'));
 
   Future<dynamic> _taskCall(String method, Map<String, dynamic> arg) {
     final bridge = this.bridge;
@@ -2241,9 +2251,13 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
   /// 对齐项目再订阅：「全部对话」里点别的项目的会话，桥得先切过去，
   /// 否则订阅会打到错的项目上（开不出来或开错）。
   Future<void> _openSessionAligned(String sessionId, int gen) async {
-    final t = _taskById(sessionId);
-    final ok = await ensureTaskProject(t);
-    if (!ok) throw StateError('这个会话所属的项目现在连不上');
+    // 查不到 = 新会话还没进列表/索引：**不切桥**（桥本就是对的，见
+    // `_taskByIdOrNull` 的说明），直接订阅。查得到才需要对齐项目。
+    final t = _taskByIdOrNull(sessionId);
+    if (t != null) {
+      final ok = await ensureTaskProject(t);
+      if (!ok) throw StateError('这个会话所属的项目现在连不上');
+    }
     await _openSession(sessionId, gen);
   }
 

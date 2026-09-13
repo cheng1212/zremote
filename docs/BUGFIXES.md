@@ -884,6 +884,27 @@
   失败卡判据改为纯函数 `shouldShowChatOpenFailure`（只有 chatError 非空、
   有 sessionId、且没有本机历史顶着才亮）；③有本机历史时顶部那行提示改成
   可点的「本机记录 · 连不上服务端，点这里重试」。
+- **补丁 2（同日，用户实测「新建会话第一条消息总是发不出去」）**：回归，
+  根因是乐观切换引入的——`_openSessionAligned` 用了**会抛**的 `_taskById`，
+  而刚 `createSession` 出来的新会话此刻不在任何列表里、索引帧也没到，
+  于是抛 `Bad state: 任务不存在: sess_…`，整个首条发送失败。
+  修：拆出不抛的 `_taskByIdOrNull`；**打开会话**用它（查不到 = 新会话，
+  不切桥直接订阅，桥本来就是对的），重命名/置顶/归档仍用会抛的
+  `_taskById`（那些操作拿不准 scope 会把请求打到错的项目上）。
+- **模型切换排查（同日，用户报「切不到 GLM 5.3 Flash」）**：探针实测
+  （`test/manual_glm_switch_probe_test.dart`）证明**切换机制是好的**：
+  · App 实际发的扁平形状 `switchModelConfig{provider,model,thought}` 被接受
+    → `builtin:bigmodel-coding-plan/GLM-5.3-Flash thought=high` ✓；
+  · 新建会话带 config 也能落到 GLM-5.3-Flash ✓；
+  · 对照组：`builtin:bigmodel-start-plan`（坏常量）与新建会话默认的 UUID
+    provider 都被 `provider.notInRegistry` 拒 —— 与 `model_defaults.dart`
+    的记载一致；
+  · 新建会话**服务端默认**是 UUID provider + `qwen3.8-flash`（即 App 标记的
+    "欠费基线"），所以草稿必须显式带 config（`_draftConfig()` 已带）。
+  结论：用户观感里的"切不到"极可能是被上面的 `任务不存在` 连累（会话在模型
+  生效前就失败了）。另注：前一个探针 `manual_switch_runtime_probe_test.dart`
+  只试了 `runtimeModel` 对象形状、全被 `proto.invalidPayload` 拒，**没覆盖
+  App 实际发的扁平形状**，容易误判"切换坏了"。
 
 ### 改进 会话历史：首屏 100 条 + 显式「拉取全部」（探针实测裁定，2026-09-13）
 - 用户报障「历史拉不出来，好像只到上次切模型那儿」。探针实测

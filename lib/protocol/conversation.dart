@@ -1204,6 +1204,9 @@ class ConversationState extends ChangeNotifier {
         final window = rowsObj['window'];
         if (window is List) {
           final windowRows = castMapList(window);
+          for (final r in windowRows) {
+            _stampLocalTs(r);
+          }
           final head = windowRows.isEmpty
               ? null
               : (windowRows.first['rowId'] as num?)?.toInt();
@@ -1270,6 +1273,13 @@ class ConversationState extends ChangeNotifier {
 
   bool get hasMoreOlder => firstRowId != null && rows.length < totalCount;
 
+  /// 本端首次见到该行的毫秒时刻（消息时间戳显示用）。
+  /// 服务端行不带时间字段，本端时钟是唯一可得来源；快照跨重启后没有
+  /// 此字段 → UI 不显示时间（诚实降级，宁缺毋错）。
+  void _stampLocalTs(Map<String, dynamic> row) {
+    row['localTs'] ??= DateTime.now().millisecondsSinceEpoch;
+  }
+
   /// rowsRange 拉回的更早行：去重、升序、前置合并。
   void mergeOlder(List<Map<String, dynamic>> older) {
     final known = {for (final r in rows) (r['rowId'] as num?)?.toInt(): true};
@@ -1285,6 +1295,9 @@ class ConversationState extends ChangeNotifier {
           ),
         );
     if (fresh.isNotEmpty) {
+      for (final r in fresh) {
+        _stampLocalTs(r);
+      }
       rows = [...fresh, ...rows];
       firstRowId = (rows.first['rowId'] as num?)?.toInt();
       olderMergeEpoch++;
@@ -1327,6 +1340,7 @@ class ConversationState extends ChangeNotifier {
     switch (delta['op']) {
       case 'row.appended':
         final row = (delta['row'] as Map).cast<String, dynamic>();
+        _stampLocalTs(row);
         rows = [...rows, row];
         totalCount += 1;
         firstRowId ??= (row['rowId'] as num?)?.toInt();
@@ -1334,6 +1348,10 @@ class ConversationState extends ChangeNotifier {
         final row = (delta['row'] as Map).cast<String, dynamic>();
         final index = _lastIndexOfRow((row['rowId'] as num?)?.toInt());
         if (index != -1) {
+          // 服务端新拷贝不带本端时间：原行的 localTs 是首次接收时刻，
+          // 必须搬过来，否则每次行更新时间戳都会跳成"刚刚"。
+          final prevTs = rows[index]['localTs'];
+          if (prevTs != null) row['localTs'] = prevTs;
           rows = [...rows]..[index] = row;
         }
       case 'row.removed':

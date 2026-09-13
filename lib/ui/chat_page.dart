@@ -451,6 +451,23 @@ class _ChatPageState extends State<ChatPage> {
     return AnchorSample(rowId, topY);
   }
 
+  /// 消息行的时间标签（用户裁定 2026-09-14：消息上加时间戳）。
+  /// 只给用户消息/助手回复显示；行没有本端接收时间（localTs，跨重启的
+  /// 历史快照行）就不显示——宁缺毋错。当天只显示时刻，跨天带日期。
+  String? _rowTimeLabel(Map<String, dynamic> row) {
+    final kind = row['kind'];
+    if (kind != 'userInput' && kind != 'assistantText') return null;
+    final ts = row['localTs'];
+    if (ts is! num) return null;
+    final t = DateTime.fromMillisecondsSinceEpoch(ts.toInt());
+    final now = DateTime.now();
+    final hm =
+        '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+    final sameDay =
+        t.year == now.year && t.month == now.month && t.day == now.day;
+    return sameDay ? hm : '${t.month}/${t.day} $hm';
+  }
+
   /// 列表索引里该会话的预览文本（无记录/无预览给空串）。
   /// 用于「伪空」判定：索引有货但行窗口刷不出 → 空态要说真相别误导。
   String _listedPreviewFor(String sid) {
@@ -4062,6 +4079,29 @@ class _ChatPageState extends State<ChatPage> {
                 card = GestureDetector(
                   onLongPress: () => _openAssistantActions(rowId, row),
                   child: card,
+                );
+              }
+              // 消息时间戳：跟随气泡对齐（用户右/助手左），淡色小字。
+              final timeLabel = _rowTimeLabel(row);
+              if (timeLabel != null) {
+                final isUser = row['kind'] == 'userInput';
+                card = Column(
+                  crossAxisAlignment: isUser
+                      ? CrossAxisAlignment.end
+                      : CrossAxisAlignment.start,
+                  children: [
+                    card,
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2, left: 6, right: 6),
+                      child: Text(
+                        timeLabel,
+                        style: const TextStyle(
+                          fontSize: 9.5,
+                          color: ZT.inkFaint,
+                        ),
+                      ),
+                    ),
+                  ],
                 );
               }
               return card;

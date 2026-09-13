@@ -1084,6 +1084,19 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
     });
   }
 
+  /// 硬同步（抽屉「从服务端拉取最新」）：整表重拉服务端权威数据——
+  /// 会话列表 + 归档 + 「全部对话」视图（若在）+ 索引流强制重同步
+  /// （标题/相位跟着刷新）。用户手动触发的「以服务端为准」校准入口，
+  /// 与自动轮询/退避重试互不干扰。
+  Future<void> pullLatest() {
+    return Future.wait([
+      loadTasks(),
+      loadArchivedTasks(),
+      if (viewingAllProjects) loadAllProjectTasks(),
+      indexSub?.forceResync() ?? Future<void>.value(),
+    ]);
+  }
+
   /// 任务卡 token 消耗缓存（taskId → 累计 token）；异步补拉，失败静默。
   /// 拉过的按 tokenFetchDue 的 TTL 过期重拉——长跑会话的数字不能停在旧值。
   final _taskTokens = <String, num>{};
@@ -1745,6 +1758,11 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
     final index = indexSub?.state;
     if (index == null || !index.ready) return;
     final byId = {for (final t in tasks) '${t['taskId']}': t};
+    // 索引流只**增补**已存在的卡片（标题/相位/活跃时间/预览），不再把
+    // 「索引有、列表没有」的会话重建成新卡——那是幽灵复活的口子：跨项目
+    // 删除只摘了列表条目时，别端下次加载会把它变回来。列表成员一律以
+    // 服务端 listTasks 为准（多端一致性批次，用户裁定：下次加载必一致）。
+    // 新会话的及时可见由 createSession 成功后主动 loadTasks 承担。
     for (final entry in index.list) {
       final existing = byId[entry.sessionId];
       if (existing != null) {
@@ -1753,17 +1771,6 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
           'title': entry.title.isNotEmpty ? entry.title : existing['title'],
           'phase': entry.phase,
           if (entry.lastActivityAt > 0) 'lastActivityAt': entry.lastActivityAt,
-          'lastAssistantPreview': entry.lastAssistantPreview,
-          'pendingInteraction': entry.pendingInteraction,
-        };
-      } else if (!_archivedTaskIds.contains(entry.sessionId)) {
-        // 归档的会话还在 index 流里，不能把它补回主列表——否则归档 tab
-        // 和「全部」里各出现一张，看起来像同一会话发到两处。
-        byId[entry.sessionId] = {
-          'taskId': entry.sessionId,
-          'title': entry.title,
-          'phase': entry.phase,
-          'lastActivityAt': entry.lastActivityAt,
           'lastAssistantPreview': entry.lastAssistantPreview,
           'pendingInteraction': entry.pendingInteraction,
         };
@@ -2032,10 +2039,18 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
   Future<String> createSession(
     String? firstText,
     Map<String, dynamic>? config,
-  ) {
+  ) async {
     final conv = this.conv!;
     final key = workspaceKeyOf(workspace ?? const {}) ?? '';
-    return conv.createSession(key, firstText: firstText, config: config);
+    final sessionId = await conv.createSession(
+      key,
+      firstText: firstText,
+      config: config,
+    );
+    // 索引流不再复活幽灵卡（多端一致性批次），新会话的卡片由服务端列表
+    // 承担——建完立刻拉一次，本机不用等下一轮轮询才看到。
+    unawaited(loadTasks());
+    return sessionId;
   }
 
   // ------------------------------------------------------------- commands

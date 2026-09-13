@@ -1231,6 +1231,31 @@ class _TasksPageState extends State<TasksPage> {
               },
             ),
             _drawerItem(
+              icon: Icons.cloud_download_rounded,
+              label: '从服务端拉取最新',
+              onTap: () async {
+                Navigator.pop(context);
+                final messenger = ScaffoldMessenger.of(context);
+                try {
+                  await app.pullLatest();
+                  messenger.showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        '已按服务端对齐 · ${app.tasks.length} 个对话',
+                      ),
+                    ),
+                  );
+                } on Object catch (e) {
+                  messenger.showSnackBar(
+                    SnackBar(
+                      backgroundColor: ZT.rose,
+                      content: Text('拉取失败: $e'),
+                    ),
+                  );
+                }
+              },
+            ),
+            _drawerItem(
               icon: Icons.schedule_rounded,
               label: '定时任务',
               onTap: () {

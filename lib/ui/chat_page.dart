@@ -2639,6 +2639,7 @@ class _ChatPageState extends State<ChatPage> {
   /// Composer「任务」槽与 AppBar 活动按钮共用此入口。
   void _openTasksPanelSheet() {
     unawaited(widget.app.loadAutomations());
+    final autoShowAll = ValueNotifier<bool>(false);
     showModalBottomSheet(
       context: context,
       backgroundColor: ZT.bg,
@@ -2649,15 +2650,27 @@ class _ChatPageState extends State<ChatPage> {
       builder: (sheetCtx) => DefaultTabController(
         length: 3,
         child: AnimatedBuilder(
-          animation: Listenable.merge([widget.app, widget.app.chat?.state]),
+          animation: Listenable.merge([
+            widget.app,
+            widget.app.chat?.state,
+            autoShowAll,
+          ]),
           builder: (sheetCtx, _) {
             final st = _state;
             final works = parseActiveWorks(st?.control);
             final subs = streamingSubagents(st?.rows ?? const []);
             final bg = parseBackgroundWorks(st?.snapshot?["backgroundWorks"]);
-            final autos = [
+            final curTag = AutomationView.tagOfSession(
+              widget.app.chat?.sessionId ?? '',
+            );
+            final autosAll = [
               for (final m in widget.app.automations) AutomationView.fromMap(m),
             ];
+            final autos = filterAutomationsBySession(
+              autosAll,
+              curTag,
+              showAll: autoShowAll.value,
+            );
             return SafeArea(
               child: SizedBox(
                 height: MediaQuery.of(sheetCtx).size.height * 0.7,
@@ -2687,7 +2700,7 @@ class _ChatPageState extends State<ChatPage> {
                             parseSubagents(st?.snapshot?['subagents']),
                           ),
                           _backgroundTab(bg),
-                          _automationsTab(autos),
+                          _automationsTab(autos, autoShowAll, autosAll.length),
                         ],
                       ),
                     ),
@@ -3110,19 +3123,51 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
-  Widget _automationsTab(List<AutomationView> autos) {
+  Widget _automationsTab(
+    List<AutomationView> autos,
+    ValueNotifier<bool> showAll,
+    int total,
+  ) {
     return ListView(
       padding: const EdgeInsets.fromLTRB(18, 12, 18, 18),
       children: [
+        Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: Row(
+            children: [
+              const Text(
+                '只看本会话',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                  color: ZT.inkSoft,
+                ),
+              ),
+              Switch(
+                value: !showAll.value,
+                activeThumbColor: ZT.primaryDeep,
+                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                onChanged: (v) => showAll.value = !v,
+              ),
+              const Spacer(),
+              Text(
+                total > autos.length ? '${autos.length}/$total 条' : '${autos.length} 条',
+                style: const TextStyle(fontSize: 11, color: ZT.inkFaint),
+              ),
+            ],
+          ),
+        ),
         if (autos.isEmpty)
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 24),
             child: Column(
               children: [
-                const Text(
-                  '还没有定时任务',
+                Text(
+                  total > 0
+                      ? '本会话暂无定时任务（共 $total 条，可关「只看本会话」查看）'
+                      : '还没有定时任务',
                   textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 12.5, color: ZT.inkFaint),
+                  style: const TextStyle(fontSize: 12.5, color: ZT.inkFaint),
                 ),
                 const SizedBox(height: 8),
                 TextButton(

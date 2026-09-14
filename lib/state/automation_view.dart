@@ -89,6 +89,36 @@ class AutomationView {
 
   /// 一次性任务（recurring=false 且有 maxRuns）标记。
   bool get oneShot => !recurring;
+
+  /// 标题中的会话标记（@s685e → '685e'）；无标记为 null。
+  /// 约定：agent 建任务时在标题尾加 ` @s` + 创建会话 sess_ id 前 4 位。
+  String? get sessionTag {
+    final m = _autoTagRe.firstMatch(title);
+    return m?.group(1);
+  }
+
+  /// 由完整会话 id 提取标记位：sess_685ebfd2-… → '685e'；
+  /// 非 sess_ 前缀取 id 前 4 位兜底（小写）。
+  static String tagOfSession(String sessionId) {
+    final s = sessionId.toLowerCase();
+    final m = RegExp(r'sess_([0-9a-f]{4})').firstMatch(s);
+    final hex = m?.group(1) ?? s;
+    return hex.length > 4 ? hex.substring(0, 4) : hex;
+  }
+}
+
+/// 会话标记正则：@s + 4 位 hex，后随词边界（不吞更长 hex 串）。
+final RegExp _autoTagRe = RegExp(r'@s([0-9a-f]{4})\b', caseSensitive: false);
+
+/// 面板过滤：默认只显示带当前会话标记的任务；[showAll] 时返回全量。
+/// [curTag] 为空（拿不到当前会话）时退化为全量，避免面板空掉。
+List<AutomationView> filterAutomationsBySession(
+  List<AutomationView> autos,
+  String? curTag, {
+  bool showAll = false,
+}) {
+  if (showAll || curTag == null || curTag.isEmpty) return autos;
+  return [for (final a in autos) if (a.sessionTag == curTag) a];
 }
 
 /// listAllAutomations 响应 → List<Map>（List 直通；Map 多字段兜底）。

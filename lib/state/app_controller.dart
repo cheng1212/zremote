@@ -1805,6 +1805,38 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
     ], timeout: const Duration(seconds: 15));
   }
 
+  /// 编辑提示词：桌面端无 update 接口，用「先建新、再删旧」实现，
+  /// title/cron/启停状态原样保留（createAutomation 支持带 enabled）。
+  /// 代价：换新 automationId → 已跑次数与执行历史清零。
+  Future<void> updateAutomationPrompt(AutomationView a, String prompt) async {
+    final bridge = this.bridge;
+    if (bridge == null) throw StateError('未连接');
+    final created = await bridge.channels.call(
+      Chan.agent,
+      'createAutomation',
+      [
+        {
+          ..._automationScope,
+          'title': a.title,
+          'cronExpr': a.cronExpr,
+          'prompt': prompt,
+          'recurring': a.recurring,
+          if (a.maxRuns != null) 'maxRuns': a.maxRuns,
+          'enabled': a.enabled,
+        },
+      ],
+      timeout: const Duration(seconds: 20),
+    );
+    final createdMap =
+        created is Map ? (created['automation'] as Map? ?? created) : const {};
+    final newId = '${createdMap['automationId'] ?? ''}';
+    if (newId.isEmpty) throw StateError('createAutomation 未返回 automationId');
+    await bridge.channels.call(Chan.agent, 'deleteAutomation', [
+      {..._automationScope, 'automationId': a.id},
+    ], timeout: const Duration(seconds: 15));
+    await loadAutomations();
+  }
+
   /// 重启自动化（协议参考文档列为标准方法）：重置其调度状态并按 cron
   /// 重新排程——自动化状态异常（不触发/重复触发）时的自救手段。
   Future<void> restartAutomation(String automationId) async {

@@ -115,6 +115,62 @@ class _AutomationsPageState extends State<AutomationsPage> {
     }
   }
 
+  /// 编辑提示词：多行输入框，保存走 updateAutomationPrompt（删旧建新）。
+  Future<void> _editPrompt(AutomationView a) async {
+    final controller = TextEditingController(text: a.prompt);
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        backgroundColor: ZT.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(ZT.radius),
+          side: ZT.inkSide(w: 1.6),
+        ),
+        title: const Text(
+          '编辑提示词',
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+        ),
+        content: TextField(
+          controller: controller,
+          minLines: 3,
+          maxLines: 8,
+          autofocus: true,
+          style: const TextStyle(fontSize: 13, height: 1.4),
+          decoration: const InputDecoration(
+            hintText: '任务每次触发时要执行/输出的内容',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogCtx, false),
+            child: const Text('取消', style: TextStyle(color: ZT.inkSoft)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogCtx, true),
+            style: TextButton.styleFrom(foregroundColor: ZT.primaryDeep),
+            child: const Text(
+              '保存',
+              style: TextStyle(fontWeight: FontWeight.w800),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (saved != true) return;
+    final prompt = controller.text.trim();
+    if (prompt.isEmpty || prompt == a.prompt) return;
+    try {
+      await widget.app.updateAutomationPrompt(a, prompt);
+    } on Object catch (e) {
+      if (!mounted) return;
+      flashMessage(context, '保存失败：$e', error: true);
+      return;
+    }
+    if (!mounted) return;
+    flashMessage(context, '提示词已更新（任务已换新，执行次数清零）');
+  }
+
   @override
   Widget build(BuildContext context) {
     final app = widget.app;
@@ -201,6 +257,7 @@ _AutomationCard(
                             onRun: _runNow,
                             onRestart: _restart,
                             onDelete: _delete,
+                            onEditPrompt: _editPrompt,
                             nowMs: _nowMs,
                           ),
                   ),
@@ -218,6 +275,7 @@ class _AutomationCard extends StatefulWidget {
   final Future<void> Function(AutomationView) onRun;
   final Future<void> Function(AutomationView) onRestart;
   final Future<void> Function(AutomationView) onDelete;
+  final Future<void> Function(AutomationView) onEditPrompt;
   final int nowMs;
 
   const _AutomationCard({
@@ -227,6 +285,7 @@ class _AutomationCard extends StatefulWidget {
     required this.onRun,
     required this.onRestart,
     required this.onDelete,
+    required this.onEditPrompt,
     required this.nowMs,
   });
 
@@ -292,11 +351,28 @@ class _AutomationCardState extends State<_AutomationCard> {
           if (a.prompt.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 4),
-              child: Text(
-                a.prompt,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(fontSize: 12, color: ZT.inkSoft, height: 1.35),
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => widget.onEditPrompt(a),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        a.prompt,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: ZT.inkSoft,
+                          height: 1.35,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Icon(Icons.edit_outlined, size: 13, color: ZT.inkFaint),
+                  ],
+                ),
               ),
             ),
           const SizedBox(height: 8),

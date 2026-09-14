@@ -224,3 +224,23 @@ String automationRunTime(int? ts, {int? nowMs}) {
   }
   return '${d.month}/${d.day} $hh:mm';
 }
+
+/// 会话列表小时钟：有「启用中」定时任务的会话 id 集合。
+/// 匹配规则：自动化标题带 @sXXXX 标记（与 tagOfSession 同源），XXXX 等于
+/// 会话 id 前 4 位；无标记的旧任务不点亮时钟。
+Set<String> sessionIdsWithActiveAutomation(
+  List<Map<String, dynamic>> automations,
+  Iterable<String> sessionIds,
+) {
+  final tags = <String>{};
+  for (final m in automations) {
+    if (m['enabled'] != true) continue;
+    final tag = AutomationView.fromMap(m).sessionTag;
+    if (tag != null) tags.add(tag);
+  }
+  if (tags.isEmpty) return const {};
+  return {
+    for (final sid in sessionIds)
+      if (tags.contains(AutomationView.tagOfSession(sid))) sid,
+  };
+}

@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import '../app_info.dart';
 import '../protocol/relay_client.dart';
 import '../state/app_controller.dart';
+import '../state/automation_view.dart';
 import '../state/task_filters.dart';
 import '../state/task_sort.dart';
 import '../theme.dart';
@@ -58,6 +59,8 @@ class _TasksPageState extends State<TasksPage> {
   void initState() {
     super.initState();
     widget.app.addListener(_onApp);
+    // 定时任务集合（会话卡片小时钟用）；失败只记日志不阻塞列表。
+    unawaited(widget.app.loadAutomations());
     // 12s 一次够及时（人眼对状态变化的容忍度在十几秒），又不会打爆服务端。
     _reconcileTimer = Timer.periodic(
       const Duration(seconds: 12),
@@ -628,6 +631,11 @@ class _TasksPageState extends State<TasksPage> {
       archived: app.archivedTasks,
       nowMs: DateTime.now().millisecondsSinceEpoch,
     );
+    // 有启用中定时任务的会话（标题 @sXXXX 标记匹配）→ 卡片画小时钟。
+    final cronSessions = sessionIdsWithActiveAutomation(
+      app.automations,
+      [for (final t in tasks) '${t['taskId'] ?? ''}'],
+    );
     final (relayColor, relayLabel) = relayStateStyle(app.relayState);
 
     return Scaffold(
@@ -894,6 +902,7 @@ class _TasksPageState extends State<TasksPage> {
                               final t = tasks[i];
                               final id = '${t['taskId'] ?? ''}';
                               final pinned = app.isTaskPinned(t);
+                              final hasCron = cronSessions.contains(id);
                               final selected = _selected.contains(id);
                               final phase = '${t['phase'] ?? ''}';
                               final preview =
@@ -981,6 +990,14 @@ class _TasksPageState extends State<TasksPage> {
                                                   Icons.push_pin,
                                                   size: 13,
                                                   color: ZT.primary,
+                                                ),
+                                              ],
+                                              if (hasCron) ...[
+                                                const SizedBox(width: 6),
+                                                const Icon(
+                                                  Icons.schedule_rounded,
+                                                  size: 13,
+                                                  color: ZT.grape,
                                                 ),
                                               ],
                                             ],

@@ -66,4 +66,28 @@ void main() {
       expect(filterAutomationsBySession(list, ''), list);
     });
   });
+
+  group('sessionIdsWithActiveAutomation', () {
+    final autos = [
+      {'automationId': 'a1', 'title': '每3分钟继续 @s685e', 'enabled': true},
+      {'automationId': 'a2', 'title': '旧任务无标记', 'enabled': true},
+      {'automationId': 'a3', 'title': '已暂停 @s9abc', 'enabled': false},
+    ];
+    test('启用中且带标记的会话点亮', () {
+      expect(
+        sessionIdsWithActiveAutomation(autos, [
+          'sess_685ebfd2-x',
+          'sess_9abc1111-x',
+          'sess_dead2222-x',
+        ]),
+        {'sess_685ebfd2-x'},
+      );
+    });
+    test('暂停的不点亮、无标记的不点亮', () {
+      expect(sessionIdsWithActiveAutomation(autos, ['sess_9abc1111']), isEmpty);
+    });
+    test('空任务列表返回空', () {
+      expect(sessionIdsWithActiveAutomation(const [], ['sess_685e']), isEmpty);
+    });
+  });
 }

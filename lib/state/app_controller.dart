@@ -1746,11 +1746,20 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
     })(),
   };
 
-  Future<void> setAutomationEnabled(String automationId, bool enabled) async {
+  Future<void> setAutomationEnabled(
+    String automationId,
+    bool enabled, {
+    String? workspacePath,
+  }) async {
     final bridge = this.bridge;
     if (bridge == null) throw StateError('未连接');
+    // 跨工作区：记录自带 workspacePath 时优先于当前桥接 scope。
+    final scope = <String, dynamic>{
+      ..._automationScope,
+      'workspacePath': ?workspacePath,
+    };
     await bridge.channels.call(Chan.agent, 'setAutomationEnabled', [
-      {..._automationScope, 'automationId': automationId, 'enabled': enabled},
+      {...scope, 'automationId': automationId, 'enabled': enabled},
     ], timeout: const Duration(seconds: 15));
     for (final a in automations) {
       if ('${a['automationId']}' == automationId) {
@@ -1761,12 +1770,29 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
   }
 
-  Future<void> deleteAutomation(String automationId) async {
+  /// [workspacePath]：记录自带的工作区（跨工作区任务删除必须带上，
+  /// 否则桌面端在当前 scope 里找不到任务——「看得见删不掉」的根因）。
+  /// 带了仍失败时，再去掉 scope 重试一次（部分桌面端版本按 id 全局删）。
+  Future<void> deleteAutomation(
+    String automationId, {
+    String? workspacePath,
+  }) async {
     final bridge = this.bridge;
     if (bridge == null) throw StateError('未连接');
-    await bridge.channels.call(Chan.agent, 'deleteAutomation', [
-      {..._automationScope, 'automationId': automationId},
-    ], timeout: const Duration(seconds: 15));
+    final scope = <String, dynamic>{
+      ..._automationScope,
+      'workspacePath': ?workspacePath,
+    };
+    try {
+      await bridge.channels.call(Chan.agent, 'deleteAutomation', [
+        {...scope, 'automationId': automationId},
+      ], timeout: const Duration(seconds: 15));
+    } on Object {
+      if (workspacePath == null) rethrow;
+      await bridge.channels.call(Chan.agent, 'deleteAutomation', [
+        {'automationId': automationId},
+      ], timeout: const Duration(seconds: 15));
+    }
     automations = [
       for (final a in automations)
         if ('${a['automationId']}' != automationId) a,
@@ -1805,10 +1831,14 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
     ], timeout: const Duration(seconds: 15));
   }
 
-  /// 编辑提示词：桌面端无 update 接口，用「先建新、再删旧」实现，
-  /// title/cron/启停状态原样保留（createAutomation 支持带 enabled）。
+  /// 编辑标题/提示词：桌面端无 update 接口，用「先建新、再删旧」实现，
+  /// cron/启停状态原样保留（createAutomation 支持带 enabled）。
   /// 代价：换新 automationId → 已跑次数与执行历史清零。
-  Future<void> updateAutomationPrompt(AutomationView a, String prompt) async {
+  Future<void> updateAutomation(
+    AutomationView a, {
+    required String title,
+    required String prompt,
+  }) async {
     final bridge = this.bridge;
     if (bridge == null) throw StateError('未连接');
     final created = await bridge.channels.call(
@@ -1817,7 +1847,7 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
       [
         {
           ..._automationScope,
-          'title': a.title,
+          'title': title,
           'cronExpr': a.cronExpr,
           'prompt': prompt,
           'recurring': a.recurring,
@@ -1831,9 +1861,7 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
         created is Map ? (created['automation'] as Map? ?? created) : const {};
     final newId = '${createdMap['automationId'] ?? ''}';
     if (newId.isEmpty) throw StateError('createAutomation 未返回 automationId');
-    await bridge.channels.call(Chan.agent, 'deleteAutomation', [
-      {..._automationScope, 'automationId': a.id},
-    ], timeout: const Duration(seconds: 15));
+    await deleteAutomation(a.id, workspacePath: a.workspacePath);
     await loadAutomations();
   }
 

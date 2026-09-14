@@ -3223,8 +3223,8 @@ class _ChatPageState extends State<ChatPage> {
                         value: a.enabled,
                         activeThumbColor: ZT.primaryDeep,
                         materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        onChanged: (v) =>
-                            widget.app.setAutomationEnabled(a.id, v),
+                        onChanged: (v) => widget.app.setAutomationEnabled(
+                            a.id, v, workspacePath: a.workspacePath),
                       ),
                     ],
                   ),
@@ -3307,7 +3307,11 @@ class _ChatPageState extends State<ChatPage> {
                       const SizedBox(width: 14),
                       InkWell(
                         borderRadius: BorderRadius.circular(8),
-                        onTap: () => widget.app.deleteAutomation(a.id),
+                        onTap: () =>
+                            widget.app.deleteAutomation(
+                              a.id,
+                              workspacePath: a.workspacePath,
+                            ),
                         child: const Padding(
                           padding: EdgeInsets.symmetric(
                             horizontal: 4,

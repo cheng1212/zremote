@@ -44,7 +44,11 @@ class _AutomationsPageState extends State<AutomationsPage> {
 
   Future<void> _toggle(AutomationView a, bool v) async {
     try {
-      await widget.app.setAutomationEnabled(a.id, v);
+      await widget.app.setAutomationEnabled(
+        a.id,
+        v,
+        workspacePath: a.workspacePath,
+      );
     } on Object catch (e) {
       if (!mounted) return;
       flashMessage(context, '切换失败：$e', error: true);
@@ -108,16 +112,18 @@ class _AutomationsPageState extends State<AutomationsPage> {
     );
     if (confirmed != true) return;
     try {
-      await widget.app.deleteAutomation(a.id);
+      await widget.app.deleteAutomation(a.id, workspacePath: a.workspacePath);
     } on Object catch (e) {
       if (!mounted) return;
       flashMessage(context, '删除失败：$e', error: true);
     }
   }
 
-  /// 编辑提示词：多行输入框，保存走 updateAutomationPrompt（删旧建新）。
+  /// 编辑标题/提示词：弹输入框，保存走 updateAutomation（删旧建新）。
+  /// 标题可顺带补 @sXXXX 会话标记，让老任务点亮小时钟、进本会话过滤。
   Future<void> _editPrompt(AutomationView a) async {
-    final controller = TextEditingController(text: a.prompt);
+    final titleCtrl = TextEditingController(text: a.title);
+    final promptCtrl = TextEditingController(text: a.prompt);
     final saved = await showDialog<bool>(
       context: context,
       builder: (dialogCtx) => AlertDialog(
@@ -127,19 +133,33 @@ class _AutomationsPageState extends State<AutomationsPage> {
           side: ZT.inkSide(w: 1.6),
         ),
         title: const Text(
-          '编辑提示词',
+          '编辑定时任务',
           style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
         ),
-        content: TextField(
-          controller: controller,
-          minLines: 3,
-          maxLines: 8,
-          autofocus: true,
-          style: const TextStyle(fontSize: 13, height: 1.4),
-          decoration: const InputDecoration(
-            hintText: '任务每次触发时要执行/输出的内容',
-            border: OutlineInputBorder(),
-          ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: titleCtrl,
+              autofocus: true,
+              style: const TextStyle(fontSize: 13),
+              decoration: const InputDecoration(
+                labelText: '标题（可带 @sXXXX 会话标记）',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: promptCtrl,
+              minLines: 3,
+              maxLines: 8,
+              style: const TextStyle(fontSize: 13, height: 1.4),
+              decoration: const InputDecoration(
+                labelText: '提示词（每次触发执行/输出的内容）',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
         ),
         actions: [
           TextButton(
@@ -158,17 +178,18 @@ class _AutomationsPageState extends State<AutomationsPage> {
       ),
     );
     if (saved != true) return;
-    final prompt = controller.text.trim();
-    if (prompt.isEmpty || prompt == a.prompt) return;
+    final title = titleCtrl.text.trim().isEmpty ? a.title : titleCtrl.text.trim();
+    final prompt = promptCtrl.text.trim();
+    if (prompt.isEmpty || (title == a.title && prompt == a.prompt)) return;
     try {
-      await widget.app.updateAutomationPrompt(a, prompt);
+      await widget.app.updateAutomation(a, title: title, prompt: prompt);
     } on Object catch (e) {
       if (!mounted) return;
       flashMessage(context, '保存失败：$e', error: true);
       return;
     }
     if (!mounted) return;
-    flashMessage(context, '提示词已更新（任务已换新，执行次数清零）');
+    flashMessage(context, '已更新（任务已换新，执行次数清零）');
   }
 
   @override

@@ -19,6 +19,11 @@ class AutomationView {
   final int? interval;
   final String? targetTaskId;
 
+  /// 记录自带的工作区（listAllAutomations 为全工作区列表；删除/启停
+  /// RPC 却按 scope 找任务——跨工作区操作必须带上记录自己的工作区）。
+  /// 旧桌面端记录可能没有此字段（null），此时退回当前桥接 scope。
+  final String? workspacePath;
+
   AutomationView({
     required this.id,
     required this.title,
@@ -34,6 +39,7 @@ class AutomationView {
     required this.intervalUnit,
     required this.interval,
     required this.targetTaskId,
+    required this.workspacePath,
   });
 
   factory AutomationView.fromMap(Map<String, dynamic> m) {
@@ -54,6 +60,9 @@ class AutomationView {
       intervalUnit: m['intervalUnit'] != null ? s(m['intervalUnit']) : null,
       interval: m['interval'] is num ? (m['interval'] as num).toInt() : null,
       targetTaskId: m['targetTaskId'] != null ? s(m['targetTaskId']) : null,
+      workspacePath: (m['workspacePath'] ?? m['workspace']) != null
+          ? s(m['workspacePath'] ?? m['workspace'])
+          : null,
     );
   }
 

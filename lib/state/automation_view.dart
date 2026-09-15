@@ -236,21 +236,27 @@ String automationRunTime(int? ts, {int? nowMs}) {
 }
 
 /// 会话列表小时钟：有「启用中」定时任务的会话 id 集合。
-/// 匹配规则：自动化标题带 @sXXXX 标记（与 tagOfSession 同源），XXXX 等于
-/// 会话 id 前 4 位；无标记的旧任务不点亮时钟。
+/// 匹配双通道：① 任务记录自带的 targetTaskId（桌面端任务服务触发时按它
+/// 投递，最可靠）；② 标题 @sXXXX 标记（历史约定，兜底老任务）。
 Set<String> sessionIdsWithActiveAutomation(
   List<Map<String, dynamic>> automations,
   Iterable<String> sessionIds,
 ) {
-  final tags = <String>{};
-  for (final m in automations) {
-    if (m['enabled'] != true) continue;
-    final tag = AutomationView.fromMap(m).sessionTag;
-    if (tag != null) tags.add(tag);
+  final ids = sessionIds.toSet();
+  if (ids.isEmpty || automations.isEmpty) return const {};
+  final active = [
+    for (final m in automations)
+      if (m['enabled'] == true) AutomationView.fromMap(m),
+  ];
+  if (active.isEmpty) return const {};
+  bool hits(AutomationView a, String sid) {
+    if (a.targetTaskId != null && a.targetTaskId == sid) return true;
+    final tag = a.sessionTag;
+    return tag != null && tag == AutomationView.tagOfSession(sid);
   }
-  if (tags.isEmpty) return const {};
+
   return {
-    for (final sid in sessionIds)
-      if (tags.contains(AutomationView.tagOfSession(sid))) sid,
+    for (final sid in ids)
+      if (active.any((a) => hits(a, sid))) sid,
   };
 }

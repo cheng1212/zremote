@@ -69,22 +69,50 @@ void main() {
 
   group('sessionIdsWithActiveAutomation', () {
     final autos = [
-      {'automationId': 'a1', 'title': '每3分钟继续 @s685e', 'enabled': true},
+      {
+        'automationId': 'a1',
+        'title': '每3分钟继续 @s685e',
+        'enabled': true,
+        'targetTaskId': 'sess_685ebfd2-x',
+      },
       {'automationId': 'a2', 'title': '旧任务无标记', 'enabled': true},
-      {'automationId': 'a3', 'title': '已暂停 @s9abc', 'enabled': false},
+      {
+        'automationId': 'a3',
+        'title': '已暂停 @s9abc',
+        'enabled': false,
+        'targetTaskId': 'sess_9abc1111-x',
+      },
+      {
+        'automationId': 'a4',
+        'title': '按目标会话匹配',
+        'enabled': true,
+        'targetTaskId': 'sess_dead2222-x',
+      },
     ];
-    test('启用中且带标记的会话点亮', () {
+    test('targetTaskId 命中即点亮（无标记也行）', () {
       expect(
         sessionIdsWithActiveAutomation(autos, [
           'sess_685ebfd2-x',
-          'sess_9abc1111-x',
           'sess_dead2222-x',
         ]),
-        {'sess_685ebfd2-x'},
+        {'sess_685ebfd2-x', 'sess_dead2222-x'},
       );
     });
-    test('暂停的不点亮、无标记的不点亮', () {
-      expect(sessionIdsWithActiveAutomation(autos, ['sess_9abc1111']), isEmpty);
+    test('标记兜底仍然生效', () {
+      expect(
+        sessionIdsWithActiveAutomation(autos, ['sess_9abc1111-x']),
+        isEmpty, // a3 暂停，标记命中但未启用不点亮
+      );
+      expect(
+        sessionIdsWithActiveAutomation([
+          {'automationId': 'a5', 'title': '老任务 @sab12', 'enabled': true},
+        ], ['sess_ab123456-x']),
+        {'sess_ab123456-x'},
+      );
+    });
+    test('暂停的不点亮、无标记且无 target 的不点亮', () {
+      expect(sessionIdsWithActiveAutomation(autos, ['sess_9abc1111-x']), isEmpty);
+      expect(sessionIdsWithActiveAutomation(autos, ['sess_ffff0000-x']), isEmpty);
     });
     test('空任务列表返回空', () {
       expect(sessionIdsWithActiveAutomation(const [], ['sess_685e']), isEmpty);

@@ -2529,6 +2529,7 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
     String sessionId,
     String text, {
     String? heldQueueDisposition,
+    List<String>? expectedHeldQueueItemIds,
     List<Map<String, dynamic>>? attachments,
   }) {
     final conv = this.conv;
@@ -2537,6 +2538,7 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
       sessionId,
       text,
       heldQueueDisposition: heldQueueDisposition,
+      expectedHeldQueueItemIds: expectedHeldQueueItemIds,
       attachments: attachments,
     );
   }

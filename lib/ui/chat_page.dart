@@ -697,6 +697,15 @@ class _ChatPageState extends State<ChatPage> {
         }
       }
     }
+    // 「立即发送」要清掉的持队项 id：客户端按 id 核对后才真的清队，
+    // 只传 disposition 不传 id 会被静默降级为排队（假清队 bug 根因）。
+    final heldIds = disposition == 'clearQueueAndSend'
+        ? [
+            for (final q in _state!.queueItems)
+              if ('${q['queueItemId'] ?? ''}'.isNotEmpty)
+                '${q['queueItemId']}',
+          ]
+        : const <String>[];
     // 排队快照：relay 未配对或桥降级时，消息其实先落本地队列等恢复。
     // 只在发送瞬间取一次（_outbound 会自动补发，不需要持续追踪）。
     final queued =
@@ -775,6 +784,7 @@ class _ChatPageState extends State<ChatPage> {
             sessionId,
             text,
             heldQueueDisposition: disposition,
+            expectedHeldQueueItemIds: heldIds,
             attachments: attachments,
           ),
         );
@@ -784,6 +794,7 @@ class _ChatPageState extends State<ChatPage> {
             sessionId,
             text,
             heldQueueDisposition: disposition,
+            expectedHeldQueueItemIds: heldIds,
           ),
         );
       }

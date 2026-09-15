@@ -118,4 +118,14 @@ void main() {
       expect(sessionIdsWithActiveAutomation(const [], ['sess_685e']), isEmpty);
     });
   });
+
+  group('cronPresets', () {
+    test('预设非空且 cron 均为 5 段', () {
+      expect(cronPresets, isNotEmpty);
+      cronPresets.forEach((label, expr) {
+        expect(expr.split(' ').length, 5, reason: label);
+      });
+      expect(cronPresets['每3分钟'], '*/3 * * * *');
+    });
+  });
 }

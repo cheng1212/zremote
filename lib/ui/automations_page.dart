@@ -706,3 +706,126 @@ class _AutomationCardState extends State<_AutomationCard> {
     );
   }
 }
+
+/// 会话右上角「新建定时任务」面板：选频率 + 用户自输内容。
+/// 任务名固定用会话名（任务名跟会话名走），内容按用户输入原文直建，
+/// 不经 agent 转述——根治「想让它输出继续，建出来的却是『你输出继续』」。
+class CreateCronSheet extends StatefulWidget {
+  final ZApp app;
+  final String sessionId;
+  final String sessionTitle;
+
+  const CreateCronSheet({
+    super.key,
+    required this.app,
+    required this.sessionId,
+    required this.sessionTitle,
+  });
+
+  @override
+  State<CreateCronSheet> createState() => _CreateCronSheetState();
+}
+
+class _CreateCronSheetState extends State<CreateCronSheet> {
+  String _preset = cronPresets.keys.elementAt(1); // 默认每3分钟
+  final _promptCtrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _promptCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _create() async {
+    final prompt = _promptCtrl.text.trim();
+    if (prompt.isEmpty) {
+      flashMessage(context, '先写每次要输出的内容', error: true);
+      return;
+    }
+    try {
+      await widget.app.createAutomationForSession(
+        sessionId: widget.sessionId,
+        sessionTitle: widget.sessionTitle,
+        cronExpr: cronPresets[_preset]!,
+        prompt: prompt,
+      );
+    } on Object catch (e) {
+      if (!mounted) return;
+      flashMessage(context, '创建失败：$e', error: true);
+      return;
+    }
+    if (!mounted) return;
+    Navigator.of(context).pop();
+    flashMessage(context, '已创建「${widget.sessionTitle}」· $_preset，触发后发到本会话');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(
+        left: 18,
+        right: 18,
+        top: 14,
+        bottom: MediaQuery.of(context).viewInsets.bottom + 18,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            '新建定时任务',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '任务名跟会话名走：「${widget.sessionTitle}」· 触发后发到本会话',
+            style: const TextStyle(fontSize: 11.5, color: ZT.inkFaint),
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            '执行频率',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+              color: ZT.inkSoft,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              for (final e in cronPresets.entries)
+                ChoiceChip(
+                  label: Text(e.key, style: const TextStyle(fontSize: 12)),
+                  selected: _preset == e.key,
+                  selectedColor: ZT.lemon,
+                  backgroundColor: ZT.surface,
+                  side: ZT.inkSide(w: 1.3),
+                  showCheckmark: false,
+                  onSelected: (_) => setState(() => _preset = e.key),
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _promptCtrl,
+            minLines: 2,
+            maxLines: 5,
+            autofocus: true,
+            style: const TextStyle(fontSize: 13, height: 1.4),
+            decoration: const InputDecoration(
+              hintText: '每次触发要输出的内容，原样发送（如：继续）',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: BigButton(label: '创建定时任务', onPressed: _create),
+          ),
+        ],
+      ),
+    );
+  }
+}

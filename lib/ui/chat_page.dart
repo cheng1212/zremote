@@ -2635,6 +2635,28 @@ class _ChatPageState extends State<ChatPage> {
     return b.toString();
   }
 
+  /// 右上角「新建定时任务」：选频率 + 内容自输，任务名=会话名，直建不经转述。
+  Future<void> _showCreateCronSheet() async {
+    final sid = _sid;
+    if (sid == null || widget.title.isEmpty) {
+      flashMessage(context, '会话未就绪，稍后再试', error: true);
+      return;
+    }
+    await showModalBottomSheet(
+      context: context,
+      backgroundColor: ZT.bg,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetCtx) => CreateCronSheet(
+        app: widget.app,
+        sessionId: sid,
+        sessionTitle: widget.title,
+      ),
+    );
+  }
+
   /// 任务面板：子代理活动 / 后台任务 / 定时任务 三 Tab 集合。
   /// Composer「任务」槽与 AppBar 活动按钮共用此入口。
   void _openTasksPanelSheet() {
@@ -3598,6 +3620,11 @@ class _ChatPageState extends State<ChatPage> {
               ],
             ),
             actions: [
+              IconButton(
+                tooltip: '新建定时任务',
+                icon: const Icon(Icons.alarm_add_rounded, color: ZT.ink),
+                onPressed: _showCreateCronSheet,
+              ),
               IconButton(
                 tooltip: '刷新（强制重同步）',
                 icon: const Icon(Icons.refresh_rounded, color: ZT.ink),

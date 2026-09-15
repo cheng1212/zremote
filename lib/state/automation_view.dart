@@ -235,6 +235,17 @@ String automationRunTime(int? ts, {int? nowMs}) {
   return '${d.month}/${d.day} $hh:mm';
 }
 
+/// 创建面板的频率预设 → cron 表达式（Dart map 字面量保序，chips 按此顺序）。
+const Map<String, String> cronPresets = <String, String>{
+  '每1分钟': '* * * * *',
+  '每3分钟': '*/3 * * * *',
+  '每5分钟': '*/5 * * * *',
+  '每10分钟': '*/10 * * * *',
+  '每30分钟': '*/30 * * * *',
+  '每小时': '0 * * * *',
+  '每天早上9点': '0 9 * * *',
+};
+
 /// 会话列表小时钟：有「启用中」定时任务的会话 id 集合。
 /// 匹配双通道：① 任务记录自带的 targetTaskId（桌面端任务服务触发时按它
 /// 投递，最可靠）；② 标题 @sXXXX 标记（历史约定，兜底老任务）。

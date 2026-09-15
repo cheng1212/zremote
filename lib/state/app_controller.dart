@@ -1882,6 +1882,44 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
     await loadAutomations();
   }
 
+  /// 会话右上角直建定时任务：任务名=会话名，内容用户原文直输不经转述。
+  /// 先带 targetTaskId 绑定当前会话；桌面端不认该字段时去参重试保成功。
+  Future<void> createAutomationForSession({
+    required String sessionId,
+    required String sessionTitle,
+    required String cronExpr,
+    required String prompt,
+  }) async {
+    final bridge = this.bridge;
+    if (bridge == null) throw StateError('未连接');
+    final base = <String, dynamic>{
+      ..._automationScope,
+      'title': sessionTitle.isEmpty ? '定时任务' : sessionTitle,
+      'cronExpr': cronExpr,
+      'prompt': prompt,
+      'recurring': true,
+      'enabled': true,
+    };
+    Object? lastErr;
+    for (final withTarget in const [true, false]) {
+      try {
+        await bridge.channels.call(
+          Chan.agent,
+          'createAutomation',
+          [
+            {...base, if (withTarget) 'targetTaskId': sessionId},
+          ],
+          timeout: const Duration(seconds: 20),
+        );
+        await loadAutomations();
+        return;
+      } on Object catch (e) {
+        lastErr = e;
+      }
+    }
+    throw StateError('创建失败: $lastErr');
+  }
+
   /// 重启自动化（协议参考文档列为标准方法）：重置其调度状态并按 cron
   /// 重新排程——自动化状态异常（不触发/重复触发）时的自救手段。
   Future<void> restartAutomation(String automationId) async {

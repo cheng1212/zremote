@@ -1753,10 +1753,16 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
   }) async {
     final bridge = this.bridge;
     if (bridge == null) throw StateError('未连接');
-    // 跨工作区：记录自带 workspacePath 时优先于当前桥接 scope。
+    // 跨工作区：记录自带工作区时优先于当前桥接 scope。
+    // 桌面端内部按 workspaceKey 索引任务（触发日志实证），两个名字都带，
+    // 值相同（实测 workspaceKey == 工作区路径）。
+    final ws = workspacePath
+        ?? (_automationScope['workspacePath'] ?? _automationScope['workspaceKey'])
+              as String?;
     final scope = <String, dynamic>{
       ..._automationScope,
-      'workspacePath': ?workspacePath,
+      'workspacePath': ?ws,
+      'workspaceKey': ?ws,
     };
     await bridge.channels.call(Chan.agent, 'setAutomationEnabled', [
       {...scope, 'automationId': automationId, 'enabled': enabled},
@@ -1779,9 +1785,14 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
   }) async {
     final bridge = this.bridge;
     if (bridge == null) throw StateError('未连接');
+    // 桌面端内部按 workspaceKey 索引任务（触发日志实证），两个名字都带。
+    final ws = workspacePath
+        ?? (_automationScope['workspacePath'] ?? _automationScope['workspaceKey'])
+              as String?;
     final scope = <String, dynamic>{
       ..._automationScope,
-      'workspacePath': ?workspacePath,
+      'workspacePath': ?ws,
+      'workspaceKey': ?ws,
     };
     try {
       await bridge.channels.call(Chan.agent, 'deleteAutomation', [
@@ -1792,6 +1803,12 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
       await bridge.channels.call(Chan.agent, 'deleteAutomation', [
         {'automationId': automationId},
       ], timeout: const Duration(seconds: 15));
+    }
+    // 假成功防护：RPC 返回 OK 不代表真删掉（scope 不匹配时桌面端会静默跳过
+    // ——「删了很多次一刷新又出现」的根因）。回读列表核对，没删掉就说真相。
+    await loadAutomations();
+    if (automations.any((a) => '${a['automationId']}' == automationId)) {
+      throw StateError('桌面端返回成功但任务仍在，删除未生效（请反馈厂商）');
     }
     automations = [
       for (final a in automations)

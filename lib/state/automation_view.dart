@@ -60,8 +60,9 @@ class AutomationView {
       intervalUnit: m['intervalUnit'] != null ? s(m['intervalUnit']) : null,
       interval: m['interval'] is num ? (m['interval'] as num).toInt() : null,
       targetTaskId: m['targetTaskId'] != null ? s(m['targetTaskId']) : null,
-      workspacePath: (m['workspacePath'] ?? m['workspace']) != null
-          ? s(m['workspacePath'] ?? m['workspace'])
+      workspacePath: (m['workspaceKey'] ?? m['workspacePath'] ?? m['workspace'])
+          != null
+          ? s(m['workspaceKey'] ?? m['workspacePath'] ?? m['workspace'])
           : null,
     );
   }

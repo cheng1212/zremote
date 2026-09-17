@@ -65,7 +65,10 @@ void main() {
         }
 
         // ---- 2. prepareWorkspace：模型选项 + 当前值（关键！）
-        final prep = await conv.prepareWorkspace();
+        final prepRaw = await conv.prepareWorkspace();
+        final prep = prepRaw is Map
+            ? prepRaw.cast<String, dynamic>()
+            : <String, dynamic>{};
         print('\n===== PREPARE WORKSPACE =====');
         print('slashCommands: ${(prep['slashCommands'] as List? ?? []).length}');
         final options = prep['configOptions'] as List? ?? [];

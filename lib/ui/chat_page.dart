@@ -6702,7 +6702,8 @@ class _ModelSheetState extends State<_ModelSheet> {
                           size: 18,
                           color: ZT.inkSoft,
                         ),
-                        onPressed: () => unawaited(widget.app.loadPrep()),
+                        onPressed: () =>
+                            unawaited(widget.app.loadPrep(force: true)),
                       ),
                   ],
                 ),
@@ -6749,6 +6750,18 @@ class _ModelSheetState extends State<_ModelSheet> {
                                   color: ZT.inkFaint,
                                 ),
                               ),
+                              if (widget.app.prepError != null)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 4),
+                                  child: Text(
+                                    widget.app.prepError!,
+                                    textAlign: TextAlign.center,
+                                    style: const TextStyle(
+                                      fontSize: 11.5,
+                                      color: ZT.rose,
+                                    ),
+                                  ),
+                                ),
                               const SizedBox(height: 6),
                               TextButton.icon(
                                 onPressed: () =>

@@ -737,9 +737,10 @@ class ConversationV4 {
   }
 
   /// `zcode-task.prepareWorkspace` — 模型/思考等级/模式选项 + 斜杠命令。
-  Future<Map<String, dynamic>> prepareWorkspace() async {
+  /// 返回原始结果（可能非 Map——形状变化时由上层诊断，不静默吞掉）。
+  Future<Object?> prepareWorkspace() async {
     final res = await _ch.call(Chan.task, mPrepareWorkspace, [scope]);
-    return res is Map ? res.cast<String, dynamic>() : const {};
+    return res;
   }
 
   /// `skills.list` — 当前工作区已启用的技能。

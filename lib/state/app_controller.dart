@@ -179,6 +179,7 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
 
   /// prepareWorkspace 的 configOptions / slashCommands 缓存。
   bool prepLoading = false;
+  String? prepError;
   Map<String, dynamic> prep = const {};
   List<Map<String, dynamic>> _slashCommands = const [];
 
@@ -2221,14 +2222,26 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
 
   /// 模型 / 思考等级 / 模式选项（zcode-task.prepareWorkspace）。
   /// 实测这一步本身要 1.7~3.3s，是最该给用户让路的一个。
-  Future<void> loadPrep() async {
-    if (!_backgroundGate('prep')) return;
+  Future<void> loadPrep({bool force = false}) async {
+    if (!force && !_backgroundGate('prep')) return;
     final conv = this.conv;
-    if (conv == null) return;
+    if (conv == null) {
+      prepError = '桥未就绪（未连接桌面端），稍后重试';
+      notifyListeners();
+      return;
+    }
     prepLoading = true;
+    prepError = null;
     notifyListeners();
     try {
-      prep = await conv.prepareWorkspace();
+      final res = await conv.prepareWorkspace();
+      if (res is Map) {
+        prep = res.cast<String, dynamic>();
+      } else {
+        prep = const {};
+        prepError = '服务端返回了意外类型：${res.runtimeType}';
+        log('[app] prepareWorkspace 非 Map: ${res.runtimeType} $res');
+      }
       _slashCommands = castMapList(prep['slashCommands']);
       final opts = prep['configOptions'];
       if (opts is! List || opts.isEmpty) {
@@ -2236,6 +2249,7 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
       }
       notifyListeners();
     } on Object catch (e) {
+      prepError = 'prepareWorkspace 失败: $e';
       log('[app] prepareWorkspace 失败: $e');
     } finally {
       prepLoading = false;

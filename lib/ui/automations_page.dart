@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../state/app_controller.dart';
 import '../state/automation_view.dart';
 import 'chat_page.dart';
+import 'composer_logic.dart';
 import '../theme.dart';
 
 /// 定时任务页：列表 + 下次执行倒计时 + 启用开关 + 立即运行 + 删除。
@@ -124,6 +125,14 @@ class _AutomationsPageState extends State<AutomationsPage> {
   Future<void> _editPrompt(AutomationView a) async {
     final titleCtrl = TextEditingController(text: a.title);
     final promptCtrl = TextEditingController(text: a.prompt);
+    // 模型锁定选择：null=跟随会话；当前锁定值按 modelId 匹配预选。
+    String? modelPick;
+    for (final o in widget.app.configOptionList('model')) {
+      final v = '${o['value'] ?? ''}';
+      if (a.modelLabel != null && v.endsWith('/${a.modelLabel}')) {
+        modelPick = v;
+      }
+    }
     final saved = await showDialog<bool>(
       context: context,
       builder: (dialogCtx) => AlertDialog(
@@ -136,30 +145,73 @@ class _AutomationsPageState extends State<AutomationsPage> {
           '编辑定时任务',
           style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
         ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: titleCtrl,
-              autofocus: true,
-              style: const TextStyle(fontSize: 13),
-              decoration: const InputDecoration(
-                labelText: '标题（可带 @sXXXX 会话标记）',
-                border: OutlineInputBorder(),
+        content: StatefulBuilder(
+          builder: (dialogCtx, setDState) => Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: titleCtrl,
+                autofocus: true,
+                style: const TextStyle(fontSize: 13),
+                decoration: const InputDecoration(
+                  labelText: '标题（可带 @sXXXX 会话标记）',
+                  border: OutlineInputBorder(),
+                ),
               ),
-            ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: promptCtrl,
-              minLines: 3,
-              maxLines: 8,
-              style: const TextStyle(fontSize: 13, height: 1.4),
-              decoration: const InputDecoration(
-                labelText: '提示词（每次触发执行/输出的内容）',
-                border: OutlineInputBorder(),
+              const SizedBox(height: 10),
+              TextField(
+                controller: promptCtrl,
+                minLines: 3,
+                maxLines: 8,
+                style: const TextStyle(fontSize: 13, height: 1.4),
+                decoration: const InputDecoration(
+                  labelText: '提示词（每次触发执行/输出的内容）',
+                  border: OutlineInputBorder(),
+                ),
               ),
-            ),
-          ],
+              const SizedBox(height: 10),
+              const Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  '运行模型（锁定后每次触发强制用它）',
+                  style: TextStyle(fontSize: 11.5, color: ZT.inkFaint),
+                ),
+              ),
+              const SizedBox(height: 4),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  ChoiceChip(
+                    label: const Text(
+                      '跟随会话',
+                      style: TextStyle(fontSize: 11.5),
+                    ),
+                    selected: modelPick == null,
+                    selectedColor: ZT.lemon,
+                    backgroundColor: ZT.surface,
+                    side: ZT.inkSide(w: 1.3),
+                    showCheckmark: false,
+                    onSelected: (_) => setDState(() => modelPick = null),
+                  ),
+                  for (final o in widget.app.configOptionList('model'))
+                    ChoiceChip(
+                      label: Text(
+                        '${(o['name'] ?? o['value'] ?? '').split('/').last}',
+                        style: const TextStyle(fontSize: 11.5),
+                      ),
+                      selected: modelPick == '${o['value'] ?? ''}',
+                      selectedColor: ZT.lemon,
+                      backgroundColor: ZT.surface,
+                      side: ZT.inkSide(w: 1.3),
+                      showCheckmark: false,
+                      onSelected: (_) =>
+                          setDState(() => modelPick = '${o['value'] ?? ''}'),
+                    ),
+                ],
+              ),
+            ],
+          ),
         ),
         actions: [
           TextButton(
@@ -180,9 +232,27 @@ class _AutomationsPageState extends State<AutomationsPage> {
     if (saved != true) return;
     final title = titleCtrl.text.trim().isEmpty ? a.title : titleCtrl.text.trim();
     final prompt = promptCtrl.text.trim();
-    if (prompt.isEmpty || (title == a.title && prompt == a.prompt)) return;
+    Object? modelSelection;
+    var setModel = false;
+    if (modelPick != null) {
+      final (pid, mid) = splitModelValue(modelPick!);
+      modelSelection = {'providerId': pid, 'modelId': mid};
+      setModel = true;
+    } else if (a.modelLabel != null) {
+      setModel = true; // 原本锁定，改选跟随 → 显式清空
+    }
+    if (prompt.isEmpty ||
+        (title == a.title && prompt == a.prompt && !setModel)) {
+      return;
+    }
     try {
-      await widget.app.updateAutomation(a, title: title, prompt: prompt);
+      await widget.app.updateAutomation(
+        a,
+        title: title,
+        prompt: prompt,
+        modelSelection: modelSelection,
+        setModel: setModel,
+      );
     } on Object catch (e) {
       if (!mounted) return;
       flashMessage(context, '保存失败：$e', error: true);
@@ -440,6 +510,15 @@ class _AutomationCardState extends State<_AutomationCard> {
                   fontFamily: 'monospace',
                   fontWeight: FontWeight.w700,
                   color: ZT.inkFaint,
+                ),
+              ),
+              Text(
+                a.modelLabel ?? '跟随会话',
+                style: TextStyle(
+                  fontSize: 10.5,
+                  fontFamily: 'monospace',
+                  fontWeight: FontWeight.w700,
+                  color: a.modelLabel != null ? ZT.rose : ZT.inkFaint,
                 ),
               ),
               Text(
@@ -742,12 +821,21 @@ class _CreateCronSheetState extends State<CreateCronSheet> {
       flashMessage(context, '先写每次要输出的内容', error: true);
       return;
     }
+    // 锁定当前会话模型：任务每次触发强制用它（可见、可后期编辑），
+    // 防止桌面端静默回退到别的供应商烧钱。
+    final cv = widget.app.configOption('model')?['currentValue'];
+    Object? modelSelection;
+    if ('$cv'.isNotEmpty) {
+      final (pid, mid) = splitModelValue('$cv');
+      modelSelection = {'providerId': pid, 'modelId': mid};
+    }
     try {
       await widget.app.createAutomationForSession(
         sessionId: widget.sessionId,
         sessionTitle: widget.sessionTitle,
         cronExpr: cronPresets[_preset]!,
         prompt: prompt,
+        modelSelection: modelSelection,
       );
     } on Object catch (e) {
       if (!mounted) return;
@@ -778,7 +866,9 @@ class _CreateCronSheetState extends State<CreateCronSheet> {
           ),
           const SizedBox(height: 4),
           Text(
-            '任务名跟会话名走：「${widget.sessionTitle}」· 触发后发到本会话',
+            '任务名跟会话名走：「${widget.sessionTitle}」· '
+                '锁定模型：${widget.app.configOption('model')?['currentValue'] ?? '跟随会话'} · '
+                '触发后发到本会话',
             style: const TextStyle(fontSize: 11.5, color: ZT.inkFaint),
           ),
           const SizedBox(height: 12),

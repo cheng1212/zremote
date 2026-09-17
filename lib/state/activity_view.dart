@@ -40,8 +40,13 @@ List<WorkView> parseActiveWorks(Object? control) {
 class SubagentActivity {
   final int? rowId;
   final String summary;
+  final String model;
 
-  SubagentActivity({required this.rowId, required this.summary});
+  SubagentActivity({
+    required this.rowId,
+    required this.summary,
+    required this.model,
+  });
 }
 
 /// rows 里 state=streaming 的子代理行 → 摘要列表。
@@ -54,6 +59,7 @@ List<SubagentActivity> streamingSubagents(List<Map<String, dynamic>> rows) {
     out.add(SubagentActivity(
       rowId: (r['rowId'] as num?)?.toInt(),
       summary: summary.isEmpty ? '运行中…' : summary,
+      model: '${r['model'] ?? ''}'.trim(),
     ));
   }
   return out;
@@ -156,6 +162,7 @@ class SubagentLiveView {
   final String summary;
   final String status; // running / waiting / blocked
   final int? startedAt;
+  final String model; // 子代理实际用的模型（服务端上报缺失时为 ''）
 
   SubagentLiveView({
     required this.childSessionId,
@@ -164,6 +171,7 @@ class SubagentLiveView {
     required this.summary,
     required this.status,
     required this.startedAt,
+    required this.model,
   });
 
   /// waiting/blocked 是"卡住等输入"，用警示色在 UI 区分。
@@ -196,6 +204,7 @@ List<SubagentLiveView> parseSubagents(Object? field) {
       summary: '${e['summary'] ?? ''}',
       status: '${e['status'] ?? 'running'}',
       startedAt: startedAt,
+      model: '${e['model'] ?? ''}'.trim(),
     ));
   }
   return out;
@@ -220,9 +229,12 @@ List<SubagentActivity> streamingAgentToolCalls(
             '${input['description'] ?? input['prompt'] ?? ''}'.trim();
       }
     }
+    final inputModel =
+        r['input'] is Map ? '${(r['input'] as Map)['model'] ?? ''}' : '';
     out.add(SubagentActivity(
       rowId: (r['rowId'] as num?)?.toInt(),
       summary: summary.isEmpty ? '运行中…' : summary,
+      model: inputModel.trim(),
     ));
   }
   return out;

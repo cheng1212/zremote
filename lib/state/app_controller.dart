@@ -1850,16 +1850,43 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
     ], timeout: const Duration(seconds: 15));
   }
 
-  /// 编辑标题/提示词：桌面端无 update 接口，用「先建新、再删旧」实现，
-  /// cron/启停状态原样保留（createAutomation 支持带 enabled）。
-  /// 代价：换新 automationId → 已跑次数与执行历史清零。
+  /// 编辑标题/提示词/锁定模型。新版桌面端有原生 updateAutomation
+  /// （含 modelSelection，2026-09-17 从 app.asar 逆向实证），直改保 ID；
+  /// 旧版无此方法时回退「删旧建新」（代价：已跑次数清零，且无法锁模型）。
+  /// modelSelection 形如 {providerId, modelId}；setModel=true 时下发
+  /// （modelSelection=null 表示清除锁定、跟随会话当前模型）。
   Future<void> updateAutomation(
     AutomationView a, {
     required String title,
     required String prompt,
+    Object? modelSelection,
+    bool setModel = false,
   }) async {
     final bridge = this.bridge;
     if (bridge == null) throw StateError('未连接');
+    try {
+      await bridge.channels.call(
+        Chan.agent,
+        'updateAutomation',
+        [
+          {
+            'automationId': a.id,
+            'title': title,
+            'cronExpr': a.cronExpr,
+            'prompt': prompt,
+            'recurring': a.recurring,
+            if (a.maxRuns != null) 'maxRuns': a.maxRuns,
+            if (setModel) 'modelSelection': modelSelection,
+            ..._automationScope,
+          },
+        ],
+        timeout: const Duration(seconds: 20),
+      );
+      await loadAutomations();
+      return;
+    } on Object catch (e) {
+      log('[app] updateAutomation 不可用（$e），回退删旧建新');
+    }
     final created = await bridge.channels.call(
       Chan.agent,
       'createAutomation',
@@ -1891,6 +1918,7 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
     required String sessionTitle,
     required String cronExpr,
     required String prompt,
+    Object? modelSelection,
   }) async {
     final bridge = this.bridge;
     if (bridge == null) throw StateError('未连接');
@@ -1901,6 +1929,7 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
       'prompt': prompt,
       'recurring': true,
       'enabled': true,
+      'modelSelection': ?modelSelection,
     };
     Object? lastErr;
     for (final withTarget in const [true, false]) {

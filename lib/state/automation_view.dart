@@ -24,6 +24,11 @@ class AutomationView {
   /// 旧桌面端记录可能没有此字段（null），此时退回当前桥接 scope。
   final String? workspacePath;
 
+  /// 任务锁定的模型（modelSelection.modelId）；null=跟随会话当前模型。
+  /// 每次触发都会把会话模型恢复成它——「切了又跳回 Deepseek」的根源，
+  /// 必须在任务卡片上可见、可改。
+  final String? modelLabel;
+
   AutomationView({
     required this.id,
     required this.title,
@@ -40,6 +45,7 @@ class AutomationView {
     required this.interval,
     required this.targetTaskId,
     required this.workspacePath,
+    required this.modelLabel,
   });
 
   factory AutomationView.fromMap(Map<String, dynamic> m) {
@@ -64,6 +70,7 @@ class AutomationView {
           != null
           ? s(m['workspaceKey'] ?? m['workspacePath'] ?? m['workspace'])
           : null,
+      modelLabel: _parseModelLabel(m),
     );
   }
 
@@ -115,6 +122,18 @@ class AutomationView {
     final hex = m?.group(1) ?? s;
     return hex.length > 4 ? hex.substring(0, 4) : hex;
   }
+}
+
+/// 记录 → 锁定模型名：优先 modelSelection.modelId，退回 model 字段尾段。
+String? _parseModelLabel(Map<String, dynamic> m) {
+  final ms = m['modelSelection'];
+  if (ms is Map) {
+    final mid = '${ms['modelId'] ?? ''}'.trim();
+    if (mid.isNotEmpty) return mid;
+  }
+  final m0 = '${m['model'] ?? ''}'.trim();
+  if (m0.isNotEmpty) return m0.split('/').last;
+  return null;
 }
 
 /// 会话标记正则：@s + 4 位 hex，后随词边界（不吞更长 hex 串）。

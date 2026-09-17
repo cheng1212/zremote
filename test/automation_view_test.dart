@@ -119,6 +119,31 @@ void main() {
     });
   });
 
+  group('modelLabel 解析', () {
+    test('modelSelection.modelId 优先', () {
+      final a = AutomationView.fromMap({
+        'automationId': 'a',
+        'title': '写作',
+        'modelSelection': {
+          'providerId': 'd0fa1d5f',
+          'modelId': 'deepseek-v4-flash',
+        },
+      });
+      expect(a.modelLabel, 'deepseek-v4-flash');
+    });
+    test('无 modelSelection 时退回 model 字段尾段', () {
+      final a = AutomationView.fromMap({
+        'automationId': 'a',
+        'title': '写作',
+        'model': '394acfdf/deepseek-v4-flash',
+      });
+      expect(a.modelLabel, 'deepseek-v4-flash');
+    });
+    test('都没有则 null（跟随会话）', () {
+      expect(AutomationView.fromMap({'automationId': 'a', 'title': 'x'}).modelLabel, isNull);
+    });
+  });
+
   group('cronPresets', () {
     test('预设非空且 cron 均为 5 段', () {
       expect(cronPresets, isNotEmpty);

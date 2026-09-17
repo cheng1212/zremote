@@ -2816,6 +2816,21 @@ class _ChatPageState extends State<ChatPage> {
                       ),
                     ],
                   ),
+                  if (s.model.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 3),
+                      child: Text(
+                        '模型 · ${s.model}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 10.5,
+                          fontFamily: 'monospace',
+                          fontWeight: FontWeight.w700,
+                          color: ZT.rose,
+                        ),
+                      ),
+                    ),
                   if (s.title.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.only(top: 3),
@@ -2855,6 +2870,32 @@ class _ChatPageState extends State<ChatPage> {
                         ),
                       ),
                       const Spacer(),
+                      InkWell(
+                        borderRadius: BorderRadius.circular(6),
+                        onTap: () async {
+                          final sid = _sid;
+                          if (sid == null) return;
+                          try {
+                            await widget.app.stop(sid);
+                            if (mounted) {
+                              flashMessage(context, '已发送停止请求（整个回合，含子代理）');
+                            }
+                          } on Object catch (e) {
+                            if (mounted) {
+                              flashMessage(context, '停止失败：$e', error: true);
+                            }
+                          }
+                        },
+                        child: const Text(
+                          '停止回合',
+                          style: TextStyle(
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.w800,
+                            color: ZT.rose,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
                       if (s.childSessionId.isNotEmpty)
                         InkWell(
                           borderRadius: BorderRadius.circular(6),
@@ -3274,6 +3315,15 @@ class _ChatPageState extends State<ChatPage> {
                           fontFamily: 'monospace',
                           fontWeight: FontWeight.w700,
                           color: ZT.inkFaint,
+                        ),
+                      ),
+                      Text(
+                        a.modelLabel ?? '跟随会话',
+                        style: TextStyle(
+                          fontSize: 10.5,
+                          fontFamily: 'monospace',
+                          fontWeight: FontWeight.w700,
+                          color: a.modelLabel != null ? ZT.rose : ZT.inkFaint,
                         ),
                       ),
                       if (a.enabled)

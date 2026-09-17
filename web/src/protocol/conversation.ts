@@ -6,6 +6,8 @@
 
 import type { Bridge } from './remoteSession'
 import { ChannelClient } from './channelClient'
+import { Subscription } from './subscription'
+import { sha256Hex } from '../lib/crypto'
 import {
   CONV_CHANNEL,
   CONV_PROTOCOL_VERSION,
@@ -15,6 +17,7 @@ import {
   M_INITIALIZE,
   M_SEND_COMMAND,
   M_SUBSCRIBE_CONV,
+  M_UNSUBSCRIBE_CONV,
   M_RESYNC_CONV,
   M_SUBSCRIBE_INDEX,
   M_UNSUBSCRIBE_INDEX,
@@ -22,13 +25,31 @@ import {
   EV_CONV_FRAME,
   EV_INDEX_FRAME,
   M_ROWS_RANGE,
+  M_ATTACHMENT_BEGIN,
+  M_ATTACHMENT_CHUNK,
+  M_ATTACHMENT_COMMIT,
+  ATTACHMENT_CHUNK_BYTES,
   CAS_COMMANDS,
   ROW_TARGET_COMMANDS,
-  IPC_UNSUBSCRIBE_TIMEOUT_MS,
   genId,
+  genUuid,
 } from './constants'
 
 type Frame = Record<string, unknown>
+
+/**
+ * Uint8Array → base64。
+ * 分块拼接（每块 32KiB）避免 `String.fromCharCode(...大数组)` 爆调用栈——
+ * 附件分片 384KiB，一次性展开会直接 RangeError。
+ */
+function toBase64(bytes: Uint8Array): string {
+  let bin = ''
+  const CHUNK = 0x8000
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK))
+  }
+  return btoa(bin)
+}
 
 export interface ConvRow extends Frame {
   rowId?: number
@@ -37,40 +58,9 @@ export interface ConvRow extends Frame {
   text?: string
 }
 
-/** ResyncGate 单飞闸（移植自 conversation.dart）：断档重同步并发风暴的断环器。 */
-export class ResyncGate {
-  private inFlightFlag = false
-  get inFlight(): boolean {
-    return this.inFlightFlag
-  }
-  tryAcquire(): boolean {
-    if (this.inFlightFlag) return false
-    this.inFlightFlag = true
-    return true
-  }
-  release(): void {
-    this.inFlightFlag = false
-  }
-}
-
-/** 40ms 微批队列：帧到齐先入队，定时器统一次 notify（对齐 _scheduleBatchNotify）。 */
-class BatchQueue {
-  private pending: Frame[] = []
-  private timer: ReturnType<typeof setTimeout> | null = null
-  constructor(private onFlush: (frames: Frame[]) => void) {}
-
-  push(frame: Frame): void {
-    this.pending.push(frame)
-    if (!this.timer) {
-      this.timer = setTimeout(() => {
-        this.timer = null
-        const batch = this.pending
-        this.pending = []
-        this.onFlush(batch)
-      }, 40)
-    }
-  }
-}
+/** 单飞闸与微批队列已抽到 `lib/gates.ts`（订阅层也要用，避免循环依赖）。
+ *  这里 re-export 保持既有引用不破。 */
+export { ResyncGate } from '../lib/gates'
 
 export class ConversationV4 {
   readonly clientId = genId('zr')
@@ -113,160 +103,86 @@ export class ConversationV4 {
     return this.handshakePromise
   }
 
-  /** 订阅一个会话：帧经 conv 事件到达；返回取消函数与帧流。 */
+  /**
+   * 订阅一个会话。
+   *
+   * ⚠️ **不要在回调里直接读 `data.payload`**——服务端推来的是**信封**
+   * （`{kind:"complete", frame:{payload:…}}` 或 `{kind:"fragment", …dataBase64}`），
+   * 真正的帧在下一层。原实现直接把信封当帧读 `payload`，导致每一帧都被静默
+   * 丢弃、聊天记录永远加载不出来。信封解包与分片组装在 `Subscription` 里。
+   */
   subscribeSession(
     sessionId: string,
     onFrame: (frame: Frame) => void,
-  ): { cancel: () => void; resubscribe: () => void } {
-    const scope = this.bridge.scope
-    const queue = new BatchQueue((frames) => {
-      for (const f of frames) onFrame(f)
+    getBase?: () => { seq: number; logEpoch: string | null },
+  ): Subscription {
+    const sub = new Subscription(this.ch, {
+      channel: CONV_CHANNEL,
+      event: EV_CONV_FRAME,
+      subscribeMethod: M_SUBSCRIBE_CONV,
+      unsubscribeMethod: M_UNSUBSCRIBE_CONV,
+      resyncMethod: M_RESYNC_CONV,
+      subscribeArgs: { sessionId },
+      unsubscribeArgs: {},
+      // 断档恢复靠整份快照：本地 seq 已对不上，只有全量能重新对齐。
+      resyncArgs: { forceSnapshot: true },
+      tag: 'v4',
+      scope: () => this.bridge.scope,
+      onFrame,
+      getBase: getBase ?? (() => ({ seq: 0, logEpoch: null })),
+      onLog: this.onLog,
     })
-    let cancelListener: (() => void) | null = null
-    let subscriptionId: string | null = null
-    let stopped = false
-
-    const start = async () => {
-      await this.handshake()
-      cancelListener = this.ch.addEventListener(CONV_CHANNEL, EV_CONV_FRAME, (data) => {
-        const frame = data as Frame
-        if (frame && String(frame['sessionId'] ?? sessionId) === sessionId) queue.push(frame)
-      }, scope)
-      const res = (await this.ch.call(
-        CONV_CHANNEL,
-        M_SUBSCRIBE_CONV,
-        [{ ...scope, sessionId }],
-        60_000,
-      )) as Record<string, unknown> | null
-      const ack = (res?.['ack'] as Record<string, unknown> | undefined) ?? null
-      subscriptionId = (ack?.['subscriptionId'] as string | undefined) ?? null
-      this.onLog?.(`[v4] subscribed ${sessionId} id=${subscriptionId}`)
-      if (!subscriptionId) throw new Error('subscribeConversationV4: missing ack.subscriptionId')
-    }
-
-    void start().catch((e) => this.onLog?.(`[v4] subscribe failed: ${e}`))
-
-    const resubscribe = () => {
-      if (stopped) return
-      void (async () => {
-        await this.handshake()
-        cancelListener?.()
-        cancelListener = null
-        const oldId = subscriptionId
-        subscriptionId = null
-        if (oldId) {
-          try {
-            await this.ch.call(
-              CONV_CHANNEL,
-              'unsubscribeConversationV4',
-              [{ ...scope, sessionId, subscriptionId: oldId }],
-              IPC_UNSUBSCRIBE_TIMEOUT_MS,
-            )
-          } catch {
-            /* 旧桥已死时退订必然失败——直接换新订阅 */
-          }
-        }
-        await start()
-      })().catch((e) => this.onLog?.(`[v4] resubscribe failed: ${e}`))
-    }
-
-    return {
-      cancel: () => {
-        stopped = true
-        cancelListener?.()
-        if (subscriptionId) {
-          void this.ch
-            .call(
-              CONV_CHANNEL,
-              'unsubscribeConversationV4',
-              [{ ...scope, sessionId, subscriptionId }],
-              IPC_UNSUBSCRIBE_TIMEOUT_MS,
-            )
-            .catch(() => {})
-        }
-      },
-      resubscribe,
-    }
+    const old = this.convSubs.get(sessionId)
+    if (old) old.cancel()
+    this.convSubs.set(sessionId, sub)
+    void sub.start().catch((e) => this.onLog?.(`[v4] subscribe failed: ${e}`))
+    return sub
   }
 
+  /** 会话订阅表（按 sessionId）。 */
+  private convSubs = new Map<string, Subscription>()
+
   /** sessions-index 订阅（任务列表实时帧）。 */
-  subscribeIndex(onFrame: (frame: Frame) => void): { cancel: () => void } {
-    const scope = this.bridge.scope
-    let cancelListener: (() => void) | null = null
-    let subscriptionId: string | null = null
-    let stopped = false
-    void (async () => {
-      await this.handshake()
-      if (stopped) return
-      cancelListener = this.ch.addEventListener(
-        CONV_CHANNEL,
-        EV_INDEX_FRAME,
-        (data) => onFrame((data as Frame) ?? {}),
-        scope,
-      )
+  subscribeIndex(
+    onFrame: (frame: Frame) => void,
+    getBase?: () => { seq: number; logEpoch: string | null },
+  ): Subscription {
+    const sub = new Subscription(this.ch, {
+      channel: CONV_CHANNEL,
+      event: EV_INDEX_FRAME,
+      subscribeMethod: M_SUBSCRIBE_INDEX,
+      unsubscribeMethod: M_UNSUBSCRIBE_INDEX,
+      resyncMethod: M_RESYNC_INDEX,
       // ⚠️ 订阅**不能**带 runtimePolicy:'existing-only'——该策略语义是
       // 「只准挂到已经在跑的运行时上」，目标工作区的 agent 运行时没在跑时
       // 桌面端会在 1ms 内直接拒绝（ZCode Agent runtime is not running），
       // 切项目必然报错（BUG-09）。不传则桌面端走 start-if-needed。
-      const res = (await this.ch.call(CONV_CHANNEL, M_SUBSCRIBE_INDEX, [
-        scope,
-      ])) as Record<string, unknown> | null
-      const ack = (res?.['ack'] as Record<string, unknown> | undefined) ?? null
-      subscriptionId = (ack?.['subscriptionId'] as string | undefined) ?? null
-      this.onLog?.(`[v4] index subscribed id=${subscriptionId}`)
-    })().catch((e) => this.onLog?.(`[v4] index subscribe failed: ${e}`))
-    return {
-      cancel: () => {
-        stopped = true
-        cancelListener?.()
-        if (subscriptionId) {
-          // 退订/重订阅**保持** existing-only：清理与断线恢复路径不该顺手
-          // 启动运行时。短超时尽力而为，旧桥已死时必然失败，别等满默认超时。
-          void this.ch
-            .call(
-              CONV_CHANNEL,
-              M_UNSUBSCRIBE_INDEX,
-              [{ ...scope, subscriptionId, runtimePolicy: 'existing-only' }],
-              IPC_UNSUBSCRIBE_TIMEOUT_MS,
-            )
-            .catch(() => {})
-        }
-      },
-    }
+      subscribeArgs: {},
+      // 退订 / 重同步**保持** existing-only：清理与断线恢复路径不该顺手启动运行时。
+      unsubscribeArgs: { runtimePolicy: 'existing-only' },
+      resyncArgs: { runtimePolicy: 'existing-only', forceSnapshot: true },
+      tag: 'v4-index',
+      scope: () => this.bridge.scope,
+      onFrame,
+      getBase: getBase ?? (() => ({ seq: 0, logEpoch: null })),
+      onLog: this.onLog,
+    })
+    this.indexSub?.cancel()
+    this.indexSub = sub
+    void sub.start().catch((e) => this.onLog?.(`[v4] index subscribe failed: ${e}`))
+    return sub
   }
 
-  /** 索引断档重同步（单飞闸，同会话）。 */
-  private indexGate = new ResyncGate()
+  private indexSub: Subscription | null = null
 
+  /** 索引断档重同步（单飞闸在 Subscription 内部）。 */
   resyncIndex(): void {
-    if (!this.indexGate.tryAcquire()) {
-      this.onLog?.('[v4] index resync in flight, coalesced')
-      return
-    }
-    const scope = this.bridge.scope
-    void this.ch
-      .call(
-        CONV_CHANNEL,
-        M_RESYNC_INDEX,
-        [{ ...scope, runtimePolicy: 'existing-only', forceSnapshot: true }],
-        30_000,
-      )
-      .catch((e) => this.onLog?.(`[v4] index resync failed: ${e}`))
-      .finally(() => this.indexGate.release())
+    this.indexSub?.resync()
   }
 
-  /** 断档重同步：ResyncGate 保证一次在途时后续合流（resync 风暴断环）。 */
-  private gate = new ResyncGate()
-
+  /** 会话断档重同步（单飞闸在 Subscription 内部）。 */
   resync(sessionId: string): void {
-    if (!this.gate.tryAcquire()) {
-      this.onLog?.('[v4] resync in flight, coalesced')
-      return
-    }
-    void this.ch
-      .call(CONV_CHANNEL, M_RESYNC_CONV, [{ sessionId, forceSnapshot: true }], 30_000)
-      .catch((e) => this.onLog?.(`[v4] resync failed: ${e}`))
-      .finally(() => this.gate.release())
+    this.convSubs.get(sessionId)?.resync()
   }
 
   async rowsRange(
@@ -301,13 +217,25 @@ export class ConversationV4 {
     return this.ch.call(CONV_CHANNEL, M_SEND_COMMAND, [envelope], 30_000)
   }
 
-  async sendText(sessionId: string, text: string, heldQueueDisposition?: string): Promise<unknown> {
-    return this.sendCommand(
-      sessionId,
-      'sendText',
-      { text, ...(heldQueueDisposition ? { heldQueueDisposition } : {}) },
-      { baseRevision: 0, logEpoch: null },
-    )
+  async sendText(
+    sessionId: string,
+    text: string,
+    opts?: {
+      heldQueueDisposition?: string
+      attachments?: Record<string, unknown>[]
+    },
+  ): Promise<unknown> {
+    const payload: Record<string, unknown> = { text }
+    if (opts?.heldQueueDisposition) payload['heldQueueDisposition'] = opts.heldQueueDisposition
+    // 附件为空数组时**不传**该字段：桌面端 zod 对空数组与缺字段的处理不同，
+    // 空数组可能被判为「有附件但无效」。
+    if (opts?.attachments && opts.attachments.length > 0) {
+      payload['attachments'] = opts.attachments
+    }
+    return this.sendCommand(sessionId, 'sendText', payload, {
+      baseRevision: 0,
+      logEpoch: null,
+    })
   }
 
   stop(sessionId: string): Promise<unknown> {
@@ -343,5 +271,102 @@ export class ConversationV4 {
       baseRevision: 0,
       logEpoch: null,
     })
+  }
+
+  /**
+   * 上传附件（begin → chunk → commit，对齐移动端 `attachmentPut`）。
+   *
+   * 返回 `{ref, fileName, mime, bytes}`，随 `sendText` 的 `attachments` 发出去。
+   * 服务端把文件落到**会话 cwd 的 `uploads/`**，消息以电脑本地路径引用它。
+   *
+   * 两个必须照抄的细节：
+   * · `connectionId` 来自 hello，**没有它上传必失败**（桥没完成握手）。
+   * · 服务端回的 `nextChunkIndex` 必须等于 n+1；不吻合要报错而不是继续——
+   *   继续会写出坏文件，而坏文件在服务端看起来是「上传成功」。
+   *
+   * @param isCancelled 分片边界检查取消旗标。分片边界是唯一自然的取消窗口：
+   *   每片一个网络往返，延迟天然限频。
+   */
+  async attachmentPut(
+    sessionId: string,
+    opts: {
+      fileName: string
+      mime: string
+      bytes: Uint8Array
+      onProgress?: (ratio: number) => void
+      isCancelled?: () => boolean
+    },
+  ): Promise<{ ref: string; fileName: string; mime: string; bytes: number }> {
+    await this.handshake()
+    const connId = this.connectionId
+    if (!connId) throw new Error('attachmentPut: 缺少 connectionId（桥未完成握手）')
+
+    const uploadId = `upload-${genUuid()}`
+    const scope = this.bridge.scope
+    const base = { connectionId: connId, uploadId, sessionId }
+    const totalBytes = opts.bytes.length
+    const totalChunks = Math.max(1, Math.ceil(totalBytes / ATTACHMENT_CHUNK_BYTES))
+    const checksum = `sha256:${await sha256Hex(opts.bytes)}`
+
+    const beginRes = (await this.ch.call(CONV_CHANNEL, M_ATTACHMENT_BEGIN, [
+      {
+        ...scope,
+        ...base,
+        fileName: opts.fileName,
+        mime: opts.mime,
+        totalBytes,
+        totalChunks,
+        checksum,
+      },
+    ])) as Record<string, unknown> | null
+
+    // 服务端已存过同校验文件（秒传）
+    if (beginRes && beginRes['state'] === 'committed') {
+      opts.onProgress?.(1)
+      return {
+        ref: String(beginRes['ref'] ?? ''),
+        fileName: opts.fileName,
+        mime: opts.mime,
+        bytes: totalBytes,
+      }
+    }
+
+    let nextChunk =
+      beginRes && typeof beginRes['nextChunkIndex'] === 'number'
+        ? (beginRes['nextChunkIndex'] as number)
+        : 0
+
+    for (let n = nextChunk; n < totalChunks; n++) {
+      if (opts.isCancelled?.()) throw new Error('上传已取消')
+      const start = n * ATTACHMENT_CHUNK_BYTES
+      const end = Math.min(start + ATTACHMENT_CHUNK_BYTES, totalBytes)
+      const chunkRes = (await this.ch.call(CONV_CHANNEL, M_ATTACHMENT_CHUNK, [
+        {
+          ...scope,
+          ...base,
+          chunkIndex: n,
+          dataBase64: toBase64(opts.bytes.subarray(start, end)),
+        },
+      ])) as Record<string, unknown> | null
+
+      nextChunk =
+        chunkRes && typeof chunkRes['nextChunkIndex'] === 'number'
+          ? (chunkRes['nextChunkIndex'] as number)
+          : n + 1
+      if (nextChunk !== n + 1) {
+        throw new Error(`attachmentPut: 服务器分片进度异常 (${nextChunk})`)
+      }
+      opts.onProgress?.(nextChunk / totalChunks)
+    }
+
+    opts.onProgress?.(1)
+    const commitRes = (await this.ch.call(CONV_CHANNEL, M_ATTACHMENT_COMMIT, [
+      { ...scope, ...base },
+    ])) as Record<string, unknown> | null
+    const ref = commitRes ? commitRes['ref'] : null
+    if (typeof ref !== 'string' || !ref) {
+      throw new Error('attachmentPut: commit 未返回 ref')
+    }
+    return { ref, fileName: opts.fileName, mime: opts.mime, bytes: totalBytes }
   }
 }

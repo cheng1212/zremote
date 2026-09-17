@@ -10,6 +10,7 @@
 import { defineStore } from 'pinia'
 import { RemoteSession, Bridge, type Workspace } from '../protocol/remoteSession'
 import { ConversationV4 } from '../protocol/conversation'
+import type { Subscription } from '../protocol/subscription'
 import { TaskChannel } from '../protocol/task'
 import { parseLinkParams, type LinkParams } from '../protocol/linkParams'
 import {
@@ -37,6 +38,12 @@ import {
   type AskAnswer,
   type AskQuestion,
 } from '../lib/ask'
+import {
+  MAX_FILE_BYTES,
+  exceedsLimit,
+  formatBytes,
+  guessMime,
+} from '../lib/upload'
 
 export type RelayUiState =
   | 'idle'
@@ -60,7 +67,8 @@ export interface ChatMeta {
  * **放模块作用域而不是 store state**：它是不可序列化的资源句柄，
  * 放进 state 会被 Pinia/Vue 做响应式包装（并且 devtools 里很脏）。
  */
-let chatSub: { cancel: () => void; resubscribe: () => void } | null = null
+let chatSub: Subscription | null = null
+let indexSub: Subscription | null = null
 
 export const useAppStore = defineStore('app', {
   state: () => ({
@@ -82,6 +90,7 @@ export const useAppStore = defineStore('app', {
     /** 来自 `sessions-index` 实时帧，按 id 索引，覆盖 phase/活跃时间。 */
     indexCards: {} as Record<string, SessionCard>,
     indexSeq: 0,
+    indexLogEpoch: null as string | null,
     sessionsLoading: false,
     /** 列表是缓存降级态（listTasks 失败）——UI 要诚实提示，不能假装新鲜。 */
     sessionsStale: false,
@@ -95,6 +104,14 @@ export const useAppStore = defineStore('app', {
     loadingOlder: false,
     /** 发送失败的人话原因（errorValueText 解出的）。 */
     sendError: '',
+
+    // —— 附件上传 ——
+    /** 上传进度 0~1；null = 没有在传。 */
+    uploadPct: null as number | null,
+    uploadName: '',
+    uploadErr: '',
+    /** 已上传待发送的附件（{ref,fileName,mime,bytes}）。 */
+    pendingAttachments: [] as { ref: string; fileName: string; mime: string; bytes: number }[],
 
     logs: [] as string[],
   }),
@@ -251,7 +268,13 @@ export const useAppStore = defineStore('app', {
       this.task = new TaskChannel(bridge, (l) => this.log(l))
 
       // 实时帧：会话列表增量（phase 变化、新会话、删除）
-      conv.subscribeIndex((frame) => this.applyIndexFrame(frame))
+      // 传 getBase 让断档 resync 能带上正确的 seq/logEpoch——不带会退化成
+      // 「从头重放」，服务端可能直接拒绝或推回一大坨。
+      indexSub?.cancel()
+      indexSub = conv.subscribeIndex(
+        (frame) => this.applyIndexFrame(frame),
+        () => ({ seq: this.indexSeq, logEpoch: this.indexLogEpoch }),
+      )
 
       // 先订阅、后拉全量：订阅期间的变更由 index 帧带来，拉取完成后再合并；
       // 顺序反过来会丢掉「订阅建立前」那一段窗口的变更。
@@ -326,10 +349,13 @@ export const useAppStore = defineStore('app', {
       if (kind === 'snapshot') {
         const snap = p['snapshot']
         if (!snap || typeof snap !== 'object') return
-        const sessions = (snap as Record<string, unknown>)['sessions']
+        const snapObj = snap as Record<string, unknown>
+        const sessions = snapObj['sessions']
         const next: Record<string, SessionCard> = {}
         for (const c of cardsFromIndex(sessions)) next[c.sessionId] = c
         this.indexCards = next
+        this.indexLogEpoch =
+          typeof snapObj['logEpoch'] === 'string' ? (snapObj['logEpoch'] as string) : null
         this.indexSeq = typeof frame['toSeq'] === 'number' ? (frame['toSeq'] as number) : 0
         return
       }
@@ -410,7 +436,12 @@ export const useAppStore = defineStore('app', {
       }
 
       chatSub?.cancel()
-      chatSub = conv.subscribeSession(sessionId, applyFrame)
+      // 传 getBase：断档 resync 要带当前 seq/logEpoch，服务端据此决定
+      // 「补发缺口」还是「重发整份快照」。
+      chatSub = conv.subscribeSession(sessionId, applyFrame, () => ({
+        seq: state.seq,
+        logEpoch: state.logEpoch,
+      }))
       this.chatLoading = false
     },
 
@@ -453,14 +484,27 @@ export const useAppStore = defineStore('app', {
 
     // ────────────────────── 发送 / 停止 ──────────────────────
 
-    /** 发送文本。失败时把服务端给的具体原因解出来（别只说「发送失败」）。 */
+    /** 发送文本（带已上传的附件）。失败时把服务端给的具体原因解出来。 */
     async sendText(text: string): Promise<void> {
       const conv = this.conv
       const sid = this.chatMeta?.sessionId
-      if (!conv || !sid || !text.trim()) return
+      if (!conv || !sid) return
+      const attachments = this.pendingAttachments
+      if (!text.trim() && attachments.length === 0) return
       this.sendError = ''
       try {
-        await conv.sendText(sid, text)
+        await conv.sendText(sid, text, {
+          attachments: attachments.length
+            ? attachments.map((a) => ({
+                ref: a.ref,
+                fileName: a.fileName,
+                mime: a.mime,
+                bytes: a.bytes,
+              }))
+            : undefined,
+        })
+        // 只有发送成功才清附件——失败要留着让用户重发，不能让他重传一遍。
+        if (attachments.length) this.pendingAttachments = []
       } catch (e) {
         this.sendError = errorValueText(e) ?? String(e)
         this.log(`[conv] sendText 失败: ${this.sendError}`)
@@ -529,6 +573,74 @@ export const useAppStore = defineStore('app', {
         this.log(`[conv] resolveInteraction 失败: ${this.sendError}`)
       }
     },
+
+    // ────────────────────── 附件上传 ──────────────────────
+
+    /**
+     * 上传一个文件到当前会话。
+     *
+     * 走 Channel IPC 的 `attachmentBeginV4 → ChunkV4 → CommitV4`（**不是 HTTP**），
+     * 所以拿不到浏览器原生字节进度，进度只能按「已发片数 / 总片数」本地计数。
+     * 服务端把文件落到**会话 cwd 的 `uploads/`**，返回的 ref 随消息发出去。
+     */
+    async uploadAttachment(file: File): Promise<boolean> {
+      const conv = this.conv
+      const sid = this.chatMeta?.sessionId
+      if (!conv || !sid) return false
+
+      if (exceedsLimit(file.size)) {
+        this.uploadErr = `${file.name} 超过 ${formatBytes(MAX_FILE_BYTES)}，暂不支持发送`
+        return false
+      }
+      const mime = guessMime(file.name, file.type)
+      this.uploadErr = ''
+      this.uploadName = file.name
+      this.uploadPct = 0
+      let cancelled = false
+      this._cancelUpload = () => {
+        cancelled = true
+      }
+      try {
+        const bytes = new Uint8Array(await file.arrayBuffer())
+        const res = await conv.attachmentPut(sid, {
+          fileName: file.name,
+          mime,
+          bytes,
+          onProgress: (p) => {
+            this.uploadPct = p
+          },
+          isCancelled: () => cancelled,
+        })
+        this.pendingAttachments = [...this.pendingAttachments, res]
+        this.log(`[upload] ${file.name} → ${res.ref}`)
+        return true
+      } catch (e) {
+        const msg = errorValueText(e) ?? String(e)
+        this.uploadErr = `${file.name} 上传失败：${msg}`
+        this.log(`[upload] 失败: ${msg}`)
+        return false
+      } finally {
+        this.uploadPct = null
+        this.uploadName = ''
+        this._cancelUpload = null
+      }
+    },
+
+    /** 取消在途上传（分片边界生效——每片一个网络往返，边界是唯一的取消窗口）。 */
+    cancelUpload(): void {
+      this._cancelUpload?.()
+    },
+
+    removeAttachment(ref: string): void {
+      this.pendingAttachments = this.pendingAttachments.filter((a) => a.ref !== ref)
+    },
+
+    clearAttachments(): void {
+      this.pendingAttachments = []
+    },
+
+    /** 上传取消旗标（模块级资源，不进 state）。 */
+    _cancelUpload: null as (() => void) | null,
 
     // ────────────────────────── 断开 ──────────────────────────
 

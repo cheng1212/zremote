@@ -23,6 +23,7 @@ import {
   shouldKeepPinning,
 } from '../lib/scroll'
 import { isProducingPhase } from '../lib/phase'
+import { MAX_FILES_PER_PICK, formatBytes } from '../lib/upload'
 import AskPanel from '../components/AskPanel.vue'
 import type { ConvRow } from '../lib/convRows'
 
@@ -31,6 +32,32 @@ const app = useAppStore()
 const input = ref('')
 const sending = ref(false)
 const listRef = ref<HTMLElement | null>(null)
+
+// ── 附件入口：三个 input 分别调起相册 / 相机 / 文件 ──
+// 移动端浏览器靠 `accept` + `capture` 分派；桌面端三者都落到文件选择器。
+const albumRef = ref<HTMLInputElement | null>(null)
+const cameraRef = ref<HTMLInputElement | null>(null)
+const fileRef = ref<HTMLInputElement | null>(null)
+const showPicker = ref(false)
+
+async function onFiles(e: Event): Promise<void> {
+  const el = e.target as HTMLInputElement
+  const files = el.files
+  if (!files || files.length === 0) return
+  const list = Array.from(files).slice(0, MAX_FILES_PER_PICK)
+  for (const f of list) {
+    const ok = await app.uploadAttachment(f)
+    if (!ok) break // 一旦失败就停，避免连环报错刷屏
+  }
+  el.value = ''
+}
+
+function openPicker(which: 'album' | 'camera' | 'file'): void {
+  showPicker.value = false
+  const target =
+    which === 'album' ? albumRef.value : which === 'camera' ? cameraRef.value : fileRef.value
+  target?.click()
+}
 
 const atBottom = ref(true)
 const followLock = new FollowLock()
@@ -206,7 +233,9 @@ onBeforeUnmount(() => {
 
 async function send(): Promise<void> {
   const text = input.value.trim()
-  if (!text || sending.value) return
+  // 只有附件没有文字也能发（传文件给 agent 看是常见用法）
+  const hasAttach = app.pendingAttachments.length > 0
+  if ((!text && !hasAttach) || sending.value) return
   sending.value = true
   try {
     await app.sendText(text)
@@ -375,7 +404,51 @@ function isExpanded(r: ConvRow, i: number): boolean {
       <AskPanel />
     </div>
 
+    <!-- 已上传待发送的附件 -->
+    <div v-if="app.pendingAttachments.length > 0" class="attach-bar">
+      <span v-for="a in app.pendingAttachments" :key="a.ref" class="attach-chip">
+        <span class="attach-chip__name">{{ a.fileName }}</span>
+        <span class="attach-chip__size">{{ formatBytes(a.bytes) }}</span>
+        <button
+          type="button"
+          class="attach-chip__x"
+          :aria-label="`移除附件 ${a.fileName}`"
+          @click="app.removeAttachment(a.ref)"
+        >
+          ×
+        </button>
+      </span>
+    </div>
+
+    <!-- 上传中：进度按片计数（走 Channel IPC，拿不到浏览器原生字节进度） -->
+    <div v-if="app.uploadPct !== null" class="strip strip--warn">
+      <span class="grow">
+        正在上传 {{ app.uploadName }} · {{ Math.round(app.uploadPct * 100) }}%
+      </span>
+      <button type="button" class="strip__action" @click="app.cancelUpload()">取消</button>
+    </div>
+    <div v-if="app.uploadErr" class="strip strip--error">{{ app.uploadErr }}</div>
+
     <footer class="composer">
+      <div v-if="showPicker" class="picker">
+        <button type="button" class="picker__item" @click="openPicker('album')">
+          🖼 相册 · 选择图片
+        </button>
+        <button type="button" class="picker__item" @click="openPicker('camera')">
+          📷 相机 · 拍照
+        </button>
+        <button type="button" class="picker__item" @click="openPicker('file')">
+          📁 文件 · 任意类型
+        </button>
+      </div>
+      <button
+        class="composer__plus"
+        type="button"
+        aria-label="添加附件"
+        @click="showPicker = !showPicker"
+      >
+        ＋
+      </button>
       <textarea
         v-model="input"
         class="composer__input"
@@ -398,11 +471,37 @@ function isExpanded(r: ConvRow, i: number): boolean {
         class="big-btn"
         type="button"
         aria-label="发送"
-        :disabled="!input.trim() || sending"
+        :disabled="(!input.trim() && app.pendingAttachments.length === 0) || sending"
         @click="send"
       >
         发送
       </button>
+      <input
+        ref="albumRef"
+        type="file"
+        accept="image/*"
+        multiple
+        hidden
+        aria-label="从相册选择图片"
+        @change="onFiles"
+      />
+      <input
+        ref="cameraRef"
+        type="file"
+        accept="image/*"
+        capture="environment"
+        hidden
+        aria-label="拍照上传"
+        @change="onFiles"
+      />
+      <input
+        ref="fileRef"
+        type="file"
+        multiple
+        hidden
+        aria-label="选择要上传的文件"
+        @change="onFiles"
+      />
     </footer>
   </div>
 </template>
@@ -669,6 +768,117 @@ function isExpanded(r: ConvRow, i: number): boolean {
 .ask-host {
   padding: 10px 12px 0;
   background: var(--bg);
+}
+.attach-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 12px 0;
+  background: var(--bg);
+}
+.attach-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 6px 4px 10px;
+  font-size: 12px;
+  background: var(--surface);
+  border: 1.3px solid var(--ink);
+  border-radius: 999px;
+}
+.attach-chip__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 200px;
+}
+.attach-chip__size {
+  color: var(--ink-faint);
+  font-size: 11px;
+}
+.attach-chip__x {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  line-height: 1;
+  font-size: 14px;
+  color: var(--ink-faint);
+  background: none;
+  border: none;
+  cursor: pointer;
+  border-radius: 50%;
+}
+.attach-chip__x:hover {
+  color: var(--rose);
+}
+.strip__action {
+  flex: none;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  color: inherit;
+  background: none;
+  border: 1.2px solid currentColor;
+  border-radius: 999px;
+  padding: 2px 10px;
+  cursor: pointer;
+}
+.strip--warn {
+  color: var(--primary-deep);
+  border-color: var(--primary);
+  background: rgba(255, 107, 26, 0.1);
+}
+.grow {
+  flex: 1;
+  min-width: 0;
+}
+.composer {
+  position: relative;
+}
+.composer__plus {
+  flex: none;
+  width: 42px;
+  height: 42px;
+  font-size: 20px;
+  line-height: 1;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1.6px solid var(--ink);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.picker {
+  position: absolute;
+  left: 12px;
+  bottom: 100%;
+  margin-bottom: 6px;
+  min-width: 200px;
+  background: var(--surface);
+  border: 1.6px solid var(--ink);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-hard);
+  overflow: hidden;
+  z-index: 5;
+}
+.picker__item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: 13.5px;
+  padding: 11px 14px;
+  color: var(--ink);
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+}
+.picker__item:last-child {
+  border-bottom: none;
+}
+.picker__item:hover {
+  background: rgba(255, 201, 60, 0.18);
 }
 .composer {
   display: flex;

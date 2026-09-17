@@ -1,5 +1,7 @@
 /// ZCode Remote v4 协议常量 — TS 移植自 lib/protocol/constants.dart（唯一蓝本）。
 
+import { randomUuid } from '../lib/crypto'
+
 export const RELAY_HEARTBEAT_INTERVAL_MS = 10_000
 export const RELAY_HEARTBEAT_ACK_TIMEOUT_MS = 30_000
 export const RELAY_WAITING_TIMEOUT_MS = 30_000
@@ -139,7 +141,13 @@ export function genId(prefix: string): string {
   return `${prefix}-${Date.now()}-${genIdCounter++}`
 }
 
-/** RFC4122-ish v4 uuid（附件 uploadId 等本地标识）。 */
+/**
+ * RFC4122-ish v4 uuid（附件 uploadId 等本地标识）。
+ *
+ * ⚠️ **不能直接用 `crypto.randomUUID()`**——它只在安全上下文（https/localhost）
+ * 可用，局域网 http 访问时是 `undefined`，调用直接抛 TypeError。
+ * 而「手机连局域网 IP」正是本项目主要使用方式。降级实现在 `lib/crypto.ts`。
+ */
 export function genUuid(): string {
-  return crypto.randomUUID()
+  return randomUuid()
 }

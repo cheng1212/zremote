@@ -6544,14 +6544,17 @@ class _ModelSheetState extends State<_ModelSheet> {
   /// 切换在途：防连点，期间思考区提示刷新中。
   bool _switching = false;
 
-  /// provider → 模型选项组，打开弹层时算一次（弹层生命周期内选项不变）。
-  late final Map<String, List<Map>> _groups;
-
   @override
   void initState() {
     super.initState();
     // 当前供应商默认展开。
     _expanded = widget.currentProvider.isEmpty ? null : widget.currentProvider;
+    // 不在打开时自动拉新（prepareWorkspace 要 0.6~1.3s，拉开就等会很慢，
+    // 用户裁定 2026-09-16）：先用缓存秒开，头部/空态的刷新按钮手动拉新。
+  }
+
+  /// provider → 模型选项组：每次 build 从最新缓存现算（量小可忽略）。
+  Map<String, List<Map>> _computeGroups() {
     final groups = <String, List<Map>>{};
     for (final o in widget.app.configOptionList('model')) {
       final (prov, _) = splitModelValue('${o['value'] ?? ''}');
@@ -6559,7 +6562,7 @@ class _ModelSheetState extends State<_ModelSheet> {
       final key = named.isNotEmpty ? named : prov;
       groups.putIfAbsent(key, () => []).add(o);
     }
-    _groups = groups;
+    return groups;
   }
 
   ConversationState? get _st => widget.app.chat?.state;
@@ -6643,7 +6646,8 @@ class _ModelSheetState extends State<_ModelSheet> {
     return AnimatedBuilder(
       animation: Listenable.merge([widget.app, ?_st]),
       builder: (context, _) {
-        final groups = _groups;
+        final groups = _computeGroups();
+        final prepLoading = widget.app.prepLoading;
         return SafeArea(
           child: Container(
             constraints: BoxConstraints(
@@ -6665,17 +6669,41 @@ class _ModelSheetState extends State<_ModelSheet> {
                   ),
                 ),
                 const SizedBox(height: 12),
-                const Row(
+                Row(
                   children: [
-                    Icon(Icons.smart_toy_rounded, size: 18, color: ZT.primary),
-                    SizedBox(width: 8),
-                    Text(
+                    const Icon(
+                      Icons.smart_toy_rounded,
+                      size: 18,
+                      color: ZT.primary,
+                    ),
+                    const SizedBox(width: 8),
+                    const Text(
                       '模型',
                       style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w900,
                       ),
                     ),
+                    const Spacer(),
+                    if (prepLoading)
+                      const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: ZT.primary,
+                        ),
+                      )
+                    else
+                      IconButton(
+                        tooltip: '刷新模型列表',
+                        icon: const Icon(
+                          Icons.refresh_rounded,
+                          size: 18,
+                          color: ZT.inkSoft,
+                        ),
+                        onPressed: () => unawaited(widget.app.loadPrep()),
+                      ),
                   ],
                 ),
                 const SizedBox(height: 3),
@@ -6685,12 +6713,54 @@ class _ModelSheetState extends State<_ModelSheet> {
                 ),
                 const SizedBox(height: 10),
                 if (groups.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.only(top: 6, bottom: 4),
-                    child: Text(
-                      '（暂无可用模型）',
-                      style: TextStyle(fontSize: 12.5, color: ZT.inkFaint),
-                    ),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6, bottom: 4),
+                    child: prepLoading
+                        ? Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: const [
+                              SizedBox(
+                                width: 14,
+                                height: 14,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: ZT.primary,
+                                ),
+                              ),
+                              SizedBox(width: 8),
+                              Text(
+                                '正在加载模型列表…',
+                                style: TextStyle(
+                                  fontSize: 12.5,
+                                  color: ZT.inkFaint,
+                                ),
+                              ),
+                            ],
+                          )
+                        : Column(
+                            children: [
+                              Text(
+                                widget.app.prep.isEmpty
+                                    ? '（暂无可用模型——选项缓存为空，点重试）'
+                                    : '（服务端未返回模型选项组：keys='
+                                        '${widget.app.prep.keys.join('/')}）',
+                                style: const TextStyle(
+                                  fontSize: 12.5,
+                                  color: ZT.inkFaint,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              TextButton.icon(
+                                onPressed: () =>
+                                    unawaited(widget.app.loadPrep()),
+                                icon: const Icon(
+                                  Icons.refresh_rounded,
+                                  size: 16,
+                                ),
+                                label: const Text('重试'),
+                              ),
+                            ],
+                          ),
                   )
                 else
                   Flexible(

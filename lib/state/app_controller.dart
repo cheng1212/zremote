@@ -178,6 +178,7 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
   String? chatError;
 
   /// prepareWorkspace 的 configOptions / slashCommands 缓存。
+  bool prepLoading = false;
   Map<String, dynamic> prep = const {};
   List<Map<String, dynamic>> _slashCommands = const [];
 
@@ -2224,12 +2225,21 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
     if (!_backgroundGate('prep')) return;
     final conv = this.conv;
     if (conv == null) return;
+    prepLoading = true;
+    notifyListeners();
     try {
       prep = await conv.prepareWorkspace();
       _slashCommands = castMapList(prep['slashCommands']);
+      final opts = prep['configOptions'];
+      if (opts is! List || opts.isEmpty) {
+        log('[app] prepareWorkspace 无选项: keys=${prep.keys.toList()}');
+      }
       notifyListeners();
     } on Object catch (e) {
       log('[app] prepareWorkspace 失败: $e');
+    } finally {
+      prepLoading = false;
+      notifyListeners();
     }
   }
 

@@ -2234,6 +2234,31 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
     prepError = null;
     notifyListeners();
     try {
+      // 新版桌面端（2026-09-17 升级）：prepareWorkspace 已删，
+      // getTaskConfigOptions({taskId}) 接管——返回选项组数组，包一层
+      // configOptions 后 UI 解析不变。失败（含旧版 Method not found）回退旧法。
+      final sid = chat?.sessionId ?? '';
+      if (sid.isNotEmpty) {
+        try {
+          final res = await conv.getTaskConfigOptions(sid);
+          final List? groups = res is List
+              ? res
+              : (res is Map ? (res['configOptions'] as List?) : null);
+          if (groups != null) {
+            prep = {'configOptions': groups};
+            _slashCommands = const [];
+            if (groups.isEmpty) {
+              log('[app] getTaskConfigOptions 空选项组');
+            }
+            notifyListeners();
+            return;
+          }
+          log('[app] getTaskConfigOptions 意外形状: '
+              '${res.runtimeType} ${res is Map ? res.keys.toList() : ''}');
+        } on Object catch (e) {
+          log('[app] getTaskConfigOptions 失败，回退旧方法: $e');
+        }
+      }
       final res = await conv.prepareWorkspace();
       if (res is Map) {
         prep = res.cast<String, dynamic>();
@@ -2249,7 +2274,7 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
       }
       notifyListeners();
     } on Object catch (e) {
-      prepError = 'prepareWorkspace 失败: $e';
+      prepError = '模型选项加载失败: $e';
       log('[app] prepareWorkspace 失败: $e');
     } finally {
       prepLoading = false;

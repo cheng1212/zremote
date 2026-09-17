@@ -738,10 +738,20 @@ class ConversationV4 {
 
   /// `zcode-task.prepareWorkspace` — 模型/思考等级/模式选项 + 斜杠命令。
   /// 返回原始结果（可能非 Map——形状变化时由上层诊断，不静默吞掉）。
+  /// ⚠️ 桌面端 2026-09-17 自动升级后本方法已被移除（Method not found），
+  /// 仅保留作旧版回退；新版用 getTaskConfigOptions。
   Future<Object?> prepareWorkspace() async {
     final res = await _ch.call(Chan.task, mPrepareWorkspace, [scope]);
     return res;
   }
+
+  /// 新版桌面端的模型/模式/思考等级选项（prepareWorkspace 的接替者）。
+  /// args 只要 {taskId}；返回选项组数组 [{id:'model'|'mode'|'thought_level',
+  /// currentValue, options:[{value,name,description,modelProviderName,...}]}]。
+  Future<Object?> getTaskConfigOptions(String taskId) =>
+      _ch.call(Chan.task, 'getTaskConfigOptions', [
+        {'taskId': taskId},
+      ], timeout: const Duration(seconds: 20));
 
   /// `skills.list` — 当前工作区已启用的技能。
   Future<List<Map<String, dynamic>>> skills() async {

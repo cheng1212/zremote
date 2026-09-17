@@ -1048,3 +1048,92 @@
 - 验证：analyze 0 问题 + 242 测试全过（新增 history_logic 8 测）。
 - 待真机验证：长会话顶部出现「还有 N 条更早」入口，点击后进度往前走、
   拉完入口消失。
+
+---
+
+## 2026-09-18 Web 端转正批次（Flutter 弃用后第一批）
+
+> 背景：用户 2026-09-18 定方向 —— **Flutter 弃用，Web 端为主，适配移动端**。
+> 本批在 `web/`（Vue 3 + Pinia + Vite + TS）上落地第一批可用功能，
+> 并修掉两个**根因级**协议缺陷。
+
+### WEB-BUG-01 聊天记录加载不出来（订阅帧是信封结构，被当帧读 payload）
+
+- **现象**（用户报障）：「聊天记录和电脑依旧不同步，加载不了」——
+  Web 端进会话后一片空白，会话列表也是空的。
+- **取证**：读 `docs/API.md` L5「订阅」小节 + 对照 Flutter 的 `_SubBase`
+  （`lib/protocol/conversation.dart:880` 起）。服务端推来的**不是逻辑帧本身**：
+  ```
+  {kind:"complete", topic, subscriptionId, frame:{ payload:{kind:"snapshot"|"deltas",…} }}
+                                                          ↑ 真正的帧在下一层
+  {kind:"fragment", logicalFrameId, fragmentIndex, fragmentCount, dataBase64}
+  ```
+- **根因**：Web 原实现把事件 `data` 直接当帧、读 `data.payload` ——
+  `payload` 在信封的**下一层**（`data.frame.payload`），所以**每一帧都被静默丢弃**。
+  长会话的快照还会被切成 ≤64 片 base64，而 Web 端**完全没有分片组装逻辑**。
+- **修复**（新增 `web/src/protocol/subscription.ts`，对齐 Flutter `_SubBase`）：
+  ① 信封解包（`complete` 取 `frame` 字段；`fragment` 走组装）；
+  ② 分片组装（按 `logicalFrameId` 收集，槽位覆盖 + 乱序容忍 + 重复片不重复计数，
+  收齐后 base64→UTF-8→JSON；30s 定时清理超 60s 残留）；
+  ③ **订阅 ack 之前的帧暂存、ack 后回放**（否则进会话首屏那批快照帧全丢，界面停空白）；
+  ④ 按 `subscriptionId` 过滤迟到帧（切会话不串台）；
+  ⑤ 快照帧即时应用、deltas 走 40ms 微批（快照会重置状态，批处理会错序）；
+  ⑥ resync 补全参数 `{...scope, subscriptionId, ...resyncArgs, base:{logEpoch,seq}}`
+  （原实现只传 `{sessionId, forceSnapshot}`，缺 `subscriptionId` 与 `base`）
+  + 失败重试 2 次（1s/2s 退避）——它是断档后唯一的恢复通道，失败即冻屏。
+- **验证**：`web/tests/fragments.test.ts` 18 测（含信封解包、乱序分片、重复片、
+  过期清理、base64 往返）；`npm run typecheck` 0 错误；122 测试全过。
+- **教训**：**「界面写完了」不等于「功能实现了」**。用户那句「很多功能要看后台
+  接口后台数据改变才是真的改变」在这里被验证——UI 层一行没错，数据根本没进来。
+  判断功能是否真实现，要能回答「调哪个后台方法」「改了后台什么数据」。
+
+### WEB-BUG-02 deltas 形状错误（按 upsert/delete 取值，真实是 op 五态）
+
+- **现象**：即使快照到了，**流式回复也永远不增长**——只有重进会话才看得到内容。
+- **根因**：原 `stores/app.ts` 按 `deltas[].upsert` / `deltas[].delete` 两个键取值，
+  而服务端真实协议（`docs/API.md` L5「deltas op」）是 **`op` 五态**：
+  `row.appended` / `row.upserted` / `row.removed` / `row.delta` / `state.updated`。
+  键名对不上 → 每个 delta 被静默忽略。
+- **修复**：`web/src/lib/convRows.ts` 重写 delta 应用，四个易错点照抄 Flutter：
+  ① `row.removed` 用 `fromRowId` 截断（保留更小的），不是删单个 rowId；
+  ② `row.upserted` 必须把旧行 `localTs` 搬过来，否则时间戳每次更新跳成「刚刚」；
+  ③ `row.delta` 的 `path` 与行 `kind` 不匹配时不动（防串字段）；
+  ④ `state.updated` 的 `config` **只能合不能替**，整包替换会抹掉没变的
+  `approvalMode` / `followupMode`。
+- **验证**：`web/tests/conv-rows.test.ts` 18 测钉死形状（含断档不推进 seq 的语义）。
+- **教训**：协议形状**照抄实测结论**，不要凭直觉命名键。写代码前先读
+  `docs/API.md` 对应小节。
+
+### WEB-BUG-03 非安全上下文下 crypto 不可用（局域网 http 直接崩）
+
+- **现象**：手机连 `http://192.168.x.x:5173` 时 `crypto.randomUUID()` 抛 TypeError，
+  附件上传的 SHA-256 也算不出来。
+- **根因**：`crypto.subtle` 与 `crypto.randomUUID` **只在安全上下文**
+  （https / localhost）可用；而「手机连局域网 IP」正是本项目主要使用方式。
+- **修复**：新增 `web/src/lib/crypto.ts` —— UUID 用 `crypto.getRandomValues`
+  自拼 v4（不受安全上下文限制），SHA-256 用纯 JS 实现（无依赖）。
+- **验证**：`web/tests/crypto.test.ts` 10 测，含 NIST 已知向量
+  （空串 / "abc" / 跨块 / padding 边界 55/56/64 字节）+ 带 byteOffset 的 subarray。
+- **连带影响（未解决，已记录）**：`Notification` 与 `Service Worker` 同样受
+  安全上下文限制 → **局域网 http 下通知与 PWA 装不了**。要通知必须走 https
+  （自签证书 / 公网部署），或接受无通知。见 `HANDOVER-Z.md` 高危坑第 13 条。
+
+### 本批新增功能（用户指定顺序：会话加载和刷新 → 列表 → 聊天记录 → 发送 → 停止）
+
+- 会话加载/刷新：`listTasks` + `listPinnedTasks` 双拉合并（置顶状态只认后者）；
+  `listTasks` 失败**不吞成空列表**（保留缓存 + 标陈旧 + 可点重拉）。
+- 会话列表：搜索、phase chip、待回答标记、相对时间、空态/加载态区分；
+  `sessions-index` 实时帧增量更新（含断档 → resyncIndex 单飞闸）。
+- 聊天记录：7 种行类型（用户气泡 / 助手正文 / 思考折叠 / 工具卡展开 / 子代理 /
+  轮次头 / **未知行显式占位**）；上滑翻页 60 条，游标用**窗口最小 rowId**
+  （BUG-28：`firstRowId` 恒为 1 会翻页死锁）。
+- 滚动稳定性：双阈值滞回（enter 100 / exit 180）+ FollowLock 意图锁存 +
+  未读徽标 + 初始钉底（rAF 稳定才停）+ 翻页高度补偿。
+- 发送/停止：停止只在**真产出**时出现（排队中给停止是错的——停了也没东西可停）。
+- 询问/审批面板：`pendingInteractions` 非空时服务端**在等回答、回合不继续**，
+  不渲染就永久卡死。契约形状照抄 BUG-17 实测结论。
+- 附件上传：`attachmentBeginV4→ChunkV4(384KiB base64)→CommitV4`，
+  秒传直返 ref，分片边界可取消，＋ 弹层三入口（相册/相机/文件）。
+- **验证**：122 测试全过（新增 119）；`vue-tsc` 0 错误；`vite build` 通过。
+- **待真机验证**：5 个复测点见 `HANDOVER-Z.md`「一、当前主线状态」。
+

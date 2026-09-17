@@ -16,19 +16,31 @@
 
 ## 新会话必读（冷启动 ≤10 行）
 
-- **先看交接**：`docs/HANDOVER-2026-09-11.md`（2026-09-11 下午场会话交接：当前状态、
-  环境事实、未完成待办、踩过的坑）。**接手先读它，再读本节。**
-- **这是什么**：ZCode 远程会话的 Android 客户端（Flutter），手机连桌面端 ZCode：看任务、聊天、传图、管计划、批权限。
-- **协议是逆向出来的**：改协议层前必读 `docs/API.md` 对应小节；协议常量只改 `lib/protocol/constants.dart`。
-- **怎么验证**：跑 `./test.sh`（Git Bash，一条命令双绿：自动设 `no_proxy` + analyze + test）。
-  手动等价：`flutter analyze` + `flutter test`（项目根 `D:\tools\zremote-new` 下），跑 test 前必须设
-  `no_proxy`/`NO_PROXY`=`localhost,127.0.0.1,::1`——本机会话注入 `http(s)_proxy`，
-  否则 flutter_tester 回连本机 WebSocket 被代理拦截，测试**全线假失败**（报 WebSocketException）。
-  CI（GitHub Actions `.github/workflows/app-ci.yml`）每次 push 自动跑同样门禁（最后验证：2026-09-14）。
-- **manual 探针**：已隔离至 `test/manual/`（@Tags(manual) 默认排除），跑法见 `test/manual/README.md`（最后验证：2026-09-14）。
-- **怎么打包**：用 `build-flutter-apk.ps1`（完整构建）；**别只用 `build-apk.ps1`/gradlew 单独打包——gradlew 不编译 Dart**（见下「环境备忘」）。
-- **绝对别做**：别把配对凭据（sid+hash）当普通数据处理——它就是凭据，可冒充终端会话；别把密钥写进任何记忆文件；别伪造坑层历史条目。
-- **分支纪律**：**单分支 `master`**，小步提交（`develop` 已不存在，旧仓库说法作废）。
+- **先看交接**：`docs/HANDOVER-Z.md`（班次交接运行手册：当前主线、台账、环境硬信息、
+  高危坑、交班仪式）。**接手先读它，再读本节。**
+- **⚠️ 方向（2026-09-18 用户决定）**：**Flutter 已弃用，Web 端为主，目标适配移动端**。
+  `lib/`（Flutter 24,021 行）**冻结不再开发，但不要删**——它是 Web 重写的唯一参照。
+  主战场是 `web/`（Vue 3 + Pinia + Vite + TS）。详见 `docs/HANDOVER-Z.md`「零」。
+- **这是什么**：ZCode 远程会话客户端（原 Flutter Android，现转 Web）。手机/浏览器连
+  桌面端 ZCode：看任务、聊天、传图、管计划、批权限。
+- **协议是逆向出来的**：改协议层前必读 `docs/API.md` 对应小节；协议常量只改
+  `lib/protocol/constants.dart`（Flutter 蓝本）与 `web/src/protocol/constants.ts`（TS 移植）。
+  ⚠️ **订阅帧是信封结构**（`{kind:"complete", frame:{payload:…}}`），不是帧本身——
+  详见 `web/src/protocol/subscription.ts` 的说明，别再把信封当帧读 `payload`。
+- **怎么验证（Web 主战场）**：`cd web && npm run typecheck`（0 错误）+ `npm test`（全过）。
+  加 `npm run build` 确认能构建。
+- **怎么验证（Flutter，仅查参照时）**：跑 `./test.sh`（Git Bash，一条命令双绿：自动设
+  `no_proxy` + analyze + test）。手动等价：`flutter analyze` + `flutter test`（项目根
+  `D:\tools\zremote-new` 下），跑 test 前必须设 `no_proxy`/`NO_PROXY`=`localhost,127.0.0.1,::1`
+  ——本机会话注入 `http(s)_proxy`，否则 flutter_tester 回连本机 WebSocket 被代理拦截，
+  测试**全线假失败**（报 WebSocketException）。
+- **manual 探针**：已隔离至 `test/manual/`（@Tags(manual) 默认排除），跑法见 `test/manual/README.md`。
+- **怎么打包**：Web 端双击 `web\启动.bat`（`npm run dev -- --host`，手机用 Network 地址）。
+  Flutter 打包（已弃用，仅存档）：`build-flutter-apk.ps1`；**别只用 `build-apk.ps1`/gradlew——
+  gradlew 不编译 Dart**。
+- **绝对别做**：别把配对凭据（sid+hash）当普通数据处理——它就是凭据，可冒充终端会话；
+  别把密钥写进任何记忆文件；别伪造坑层历史条目；**别擅自删 Flutter 代码**。
+- **分支纪律**：**单分支 `master`**，小步提交，**高频提交 + 立刻 push**（用户 2026-09-18 明确要求）。
 - **封存目录**：`D:\tools\zremote`（无 `-new`）是 .git 对象库损坏的旧仓库，**严禁读写**；
   一切命令只在 `D:\tools\zremote-new` 下执行。
 
@@ -38,9 +50,16 @@
 
 ### 项目是什么
 
-zremote：手机上的 ZCode 远程会话客户端。通过中继（Relay）连上桌面端 ZCode，
+zremote：**浏览器 / 手机上的 ZCode 远程会话客户端**。通过中继（Relay）连上桌面端 ZCode，
 实现任务列表、聊天（含图片/文件/Markdown 渲染）、计划管理、权限审批、用量统计、
-通知/自动化等能力。五层协议栈自底向上：
+通知/自动化等能力。
+
+**⚠️ 形态变更（2026-09-18，用户决定）**：原为 Flutter Android 客户端（`lib/`，24,021 行），
+现**转 Web**（`web/`，Vue 3 + Pinia + Vite + TS），目标移动端优先。
+Flutter 侧**冻结不再开发但不删除**——它是 Web 重写的参照实现（含大量踩坑后的正确解法）。
+形态：**一套代码 + 两套布局**（移动单列 / 桌面侧栏），不开两个代码库。
+
+五层协议栈自底向上（**两端共用同一套协议**）：
 
 ```
 Relay WebSocket (wss + HMAC proof)

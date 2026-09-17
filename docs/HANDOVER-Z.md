@@ -7,7 +7,8 @@
 > - **`HANDOVER-Z.md`（本文）** —— **账本 + 交接仪式**：本班干了什么、验证到哪一步、下班的入场动作（滚动维护）
 >
 > **给接手者的第一句话**：本文「零、三分钟上手」读完就能干活，不用读别的。
-> **最后更新**：2026-09-12 17:35（Z 本班开场）
+>
+> **最后更新**：2026-09-18 02:10（Z）— ⚠️ **本班发生方向性变更，请先读「零」和「一」**
 
 ---
 
@@ -15,101 +16,101 @@
 
 **你是谁**：接手 zremote 的 agent。项目唯一所有者是用户（他操作手机 + 桌面两端，真机验收）。单智能体模式，**用户直接指挥**，不走协作看板（`COLLAB.md` 已冻结，**不要**续写其任务队列/锁机制）。
 
-**项目是什么**：`D:\tools\zremote-new`，Flutter Android 客户端，远程操控桌面端 ZCode（Electron 应用）。Git 单分支 `master`。
+### ⚠️ 方向性变更（2026-09-18，用户决定，违反必错）
+
+**Flutter 弃用，Web 端成为主战场。**
+
+- 用户原话：「**我的意思是 flutter 我不要了 太麻烦了 web 要适配移动端 或者你可以做两套**」
+- **`lib/`（Flutter，24,021 行）冻结，不再投入开发**。但**不要删**——它是 Web 重写的
+  唯一参照（含大量踩坑后的正确实现），删了就没图纸了。
+- 主战场是 **`web/`（Vue 3 + Pinia + Vite + TS）**，目标是**移动端优先**。
+- 桌面端形态：**一套代码 + 两套布局**（移动：单列全屏；桌面：侧栏 + 主区）。
+  **不要开两个代码库**——协议与业务逻辑是价值主体，两份必然漂移
+  （`AUDIT-2026-09-13.md` 的 A1 已经证实这类漂移真实存在）。
+
+**项目是什么**：`D:\tools\zremote-new`，远程操控桌面端 ZCode 的**客户端**（原 Flutter Android，现转 Web）。
+Git 单分支 `master`，remote 有两个：`origin`（GitHub，日常用）+ `backup`（本地 bare）。
 
 **开工前必须先跑的两个命令**（不过不许提交任何东西）：
 ```bash
-cd D:/tools/zremote-new
-flutter analyze          # 必须 0 issues
-no_proxy='localhost,127.0.0.1,::1' NO_PROXY='localhost,127.0.0.1,::1' flutter test
+cd D:/tools/zremote-new/web
+npm run typecheck        # 期望 0 错误
+npm test                 # 期望 122 全过（只许增不许减）
 ```
 
+> Flutter 侧（仅在需要查参照实现时跑）：
+> ```bash
+> cd D:/tools/zremote-new
+> flutter analyze
+> no_proxy='localhost,127.0.0.1,::1' NO_PROXY='localhost,127.0.0.1,::1' flutter test
+> ```
 > ⚠️ **`flutter test` 必须带 `no_proxy`**：本机 WorkBuddy 会话会注入
 > `http_proxy/https_proxy=http://127.0.0.1:54135`，不绕过会让 flutter_tester 回连被拦，
 > 全线报 `WebSocketException: Invalid WebSocket upgrade request`。**这不是代码问题。**
-> `flutter analyze` 不受影响。`git fetch/push` 到本地 remote 同理加 `no_proxy='*'`。
+> `git fetch/push` 到本地 bare remote 同理加 `no_proxy='*'`。
 
-**三分钟上手后干什么**：看「二、本班台账」最新一行，那就是当前主线。
+**三分钟上手后干什么**：看「一、当前主线状态」，那就是当前主线。
 
-**长期规约（用户 2026-09-14 定，违反必错）**：**每次打 APK 分发前必须升 `pubspec.yaml` 版本号**——`version: x.y.z+N` 的 z 和 N 各 +1（如 `0.1.1+2` → `0.1.2+3`）。抽屉里显示「版本 x.y.z+N」，用户靠它核对手机上跑的是不是新包；不升版本不许打包分发。
+**长期规约（用户 2026-09-14 定，违反必错）**：**每次打 APK 分发前必须升 `pubspec.yaml` 版本号**——`version: x.y.z+N` 的 z 和 N 各 +1。抽屉里显示「版本 x.y.z+N」，用户靠它核对手机上跑的是不是新包；不升版本不许打包分发。
+（注：Web 转正后这条对 Web 的对应物是——**改了行为要能一眼看出是哪版**，别让用户对着一模一样的界面猜。）
 
 ---
 
 ## 一、当前主线状态（本节随班次覆盖，永远写最新的）
 
-**状态：真机滑动回归测试循环 —— 本班抓到并修复「翻页触发 resync 风暴」**
+**状态：Web 端第一批可用功能已落地 —— 从「加载不出来」修到「能用」**
 
 | 环节 | 状态 | 证据 |
 |---|---|---|
-| RangeError 修复（列表滑动失效根因） | ✅ 已修 + 已提交 | commit `dd47e13` |
-| analyze / test 双绿 | ✅ 通过 | analyze 0 问题；test **213** 全过（新增 4 个） |
-| **resync 风暴修复（本班）** | ✅ 已修 + 已提交 | commit `5c18032` |
-| APK 构建 | ⬜ **待重打**（修复后需重打） | 上一个包 17:26 不含本次修复 |
-| 8777 分发服务 | ✅ 运行中 | `0.0.0.0:8777 Listen`（pid 随重启变化，用 netstat 确认） |
-| **真机复测（本次修复）** | ⬜ **未做 —— 当前卡点** | 复测点见下方 |
-| 本班交接文档 | ✅ 已建 | 就是本文 |
+| 方向：Flutter → Web | ✅ 已定 | 用户 2026-09-18 明确 |
+| Web 功能拆分（112 交互点） | ✅ 已建 | `docs/WEB-FEATURE-MAP.md` |
+| **信封解包修复（聊天记录加载不出来）** | ✅ 已修 + 已提交 | commit `c8f020f` |
+| **deltas 五态修复（流式不增长）** | ✅ 已修 + 已提交 | commit `170d6d6` |
+| 会话加载 / 刷新 | ✅ 已实现 | `SessionsView.vue` + `stores/app.ts` |
+| 会话列表 | ✅ 已实现 | 同上 |
+| 聊天记录（7 种行类型） | ✅ 已实现 | `ChatView.vue` |
+| 发送 / 停止输出 | ✅ 已实现 | 同上 |
+| 询问 / 审批面板 | ✅ 已实现 | `components/AskPanel.vue` |
+| 附件上传（相册/相机/文件） | ✅ 已实现 | `lib/upload.ts` + `attachmentPut` |
+| 双绿（typecheck + test） | ✅ 通过 | 122 全过、0 类型错误 |
+| **真机复测** | ⬜ **未做 —— 当前卡点** | 需用户手机连局域网验证 |
+| Markdown 渲染 | ⬜ 未做 | 体感落差最大的一块 |
+| 模型/模式弹层 | ⬜ 未做 | 依赖 `getTaskConfigOptions({taskId})` |
+| 用量页 / 自动化页 / 我的页 | ⬜ 未做 | 独立域，整域为零 |
+| 通知 / PWA | ⬜ 未做 | **受 HTTPS 硬约束**（见「四」第 13 条） |
 
-### 本班修复：断档重同步并发风暴（`5c18032`）
+### 本班两个根因级修复（都值得记住）
 
-**现象**：滑到历史尽头触发翻页后，**聊天记录自己快速翻回最上方**。
+**① 信封解包 —— 「聊天记录和电脑不同步，加载不了」**
 
-**取证**：桌面日志 `2026-09-12.log` 17:49:21 —— 同一批**并发 12 次**
-`resyncSessionsIndexV4`（耗时 650~678ms 整齐一致=同时起跑）+ 1 次
-`resyncConversationV4`。每次带 `forceSnapshot` 整份替换列表 → 视口反复重置。
-
-**根因**：`_SubBase._resync()` 无并发保护。服务端翻页/批量重发时，40ms 微批
-窗口（`_scheduleBatchNotify`）里积压的帧会**逐帧**走 gap 判定
-（`fromSeq != seq`）→ 每帧真发一次 resync = 级联重试风暴。
-
-**修复**：
-- 新增 `ResyncGate` 单飞闸（纯逻辑类，仿 `FollowLock` 便于单测）：在途时后续
-  `onGap` 直接合流。自身重试链（`attempt>0`）不碰闸，避免放跑。
-- gap 分支**保持不推进 seq**（seq 语义是「已应用」的序号；推进会把后续合法帧
-  误判成 gap —— 这一点有专测锁定，**别手贱去"优化"它**）。
-
-**复测点**：
-1. 滑到历史尽头（触发翻页）→ 记录**不应**自己跳回顶部，视口应停在原处
-2. ~~桌面日志 `resyncSessionsIndexV4` 同一时刻**不应**出现并发多条~~
-   → **✅ 已验证（2026-09-12 18:08）**：修复前同一毫秒 12 条并发（耗时
-   650~678ms 整齐）；修复后每次只剩 1 条 `resyncConversationV4` + 1 条
-   `resyncSessionsIndexV4`（间隔 17ms=顺序执行），风暴消除。
-3. 翻页本身应正常加载出更早的内容（修复不能把翻页修坏）→ ✅ 已验证
-   （`conversationRowsRangeV4` 单次调用正常）
-
-### 另一个遗留 bug（本班发现，未修）：进会话必现的 RangeError
-
-**现象**：每次进入会话加载列表时必现（确定性复现，不是滑动触发）。
-
-**logcat 证据**（新包 18:06:53 / 18:08:06 各一次）：
+服务端推来的**不是逻辑帧本身**，而是**信封**：
 ```
-RangeError (length): Invalid value: Only valid value is 0: 1
-#0  State.widget (framework.dart)
-#1  _ChatPageState._buildList.<anonymous closure> (chat_page.dart:3622)
-#2  SliverChildBuilderDelegate.build (scroll_delegate.dart:552)
+{kind:"complete", topic, subscriptionId, frame:{ payload:{kind:"snapshot"|"deltas",…} }}
+                                                        ↑ 真正的帧在下一层
+{kind:"fragment", logicalFrameId, fragmentIndex, fragmentCount, dataBase64}
 ```
+原实现把信封当帧、直接读 `data.payload` → **每一帧都被静默丢弃**。
+长会话快照还会被切成 ≤64 片 base64，原实现**完全没有组装逻辑**。
+修复见 `web/src/protocol/subscription.ts`（对齐 Flutter 的 `_SubBase`）。
 
-**已核实的事实**：
-- `chat_page.dart:3622` = `transport: widget.app.conv`（buildRowCard 的参数行）
-- SDK `scroll_delegate.dart:552` 是 `try { child = builder(context, index); }` —— 异常被
-  Flutter **捕获**并渲染成 `ErrorWidget`（这就是进会话时看到的**灰色空白块**）
-- 错误正文来自 `RangeError.checkValidRange(start, end, length, "length")`
-  → `1 > 0` 抛错，即「对长度 0 的列表在位置 1 操作」
-- `#0 State.widget` 是 `_widget!`（仅 null-check），**不可能是它的错** —— 是 release
-  模式符号化误差，真实位置在 `#1`
+**② deltas 形状 —— 流式回复永远不增长**
 
-**结论**：`dd47e13` 的越界保护（`i<0 || i>=rows.length`）挡住了数组下标路径，但**还有
-另一条路径**抛同样的错。**非致命**（App 正常渲染，只是该行渲染成 ErrorWidget）。
+原实现按 `deltas[].upsert` / `deltas[].delete` 取值，而真实协议是 **`op` 五态**：
+`row.appended` / `row.upserted` / `row.removed` / `row.delta` / `state.updated`。
+键名对不上 → 每个 delta 被静默忽略 → 只有重进会话（整份快照）才看得到内容。
+修复见 `web/src/lib/convRows.ts`（有回归测试钉死形状）。
 
-**下一步**：已加诊断 try/catch（打印 rowId/kind/完整堆栈）重打包抓真实位置。
-`HANDOVER-Z` 读者：诊断代码在 `_buildList` itemBuilder 内，**抓完要撤**。
+**教训（对 Web 端尤其重要）**：用户那句「**很多功能要看后台接口后台数据改变才是真的改变**」是对的——
+这两个 bug 都是**界面看起来写完了、数据根本没进来**。判断一个功能是否真的实现，
+要能回答「调哪个后台方法」「改了后台什么数据」，不能只看 UI 有没有渲染。
 
-### 上一班遗留的未验证项（顺手全测）
+### 复测点（用户真机验证用）
 
-- 流式回复落定瞬间是否平滑（面板 → 列表回插）
-- 消息长按选择/复制三件套
-- 排队消息折叠栏行为
-- 通知四渠道（铃声/震动开关）、跨项目任务完成通知（BUG-35 验证）
-- 静置稳定性：滑到历史某处停 30s 视野纹丝不动
+1. 打开 Web → 配对 → 应能看见**会话列表**（不是空列表）
+2. 点进任意会话 → **聊天记录应该完整出现**（不是空白）
+3. 发一条消息 → 应看到**流式逐字增长**（不是发完没反应）
+4. 回复中 → 「停止」按钮应出现并能中断
+5. 点 ＋ → 选图片/文件 → 应看到上传进度 → 发出后消息带附件
 
 ---
 
@@ -120,20 +121,19 @@ RangeError (length): Invalid value: Only valid value is 0: 1
 
 | 时间 | 动作 | 结果 | 证据/提交 |
 |---|---|---|---|
-| 09-12 17:58 | 抓到并修复「翻页触发 resync 风暴」 | 双绿（213 测试），已提交 | `5c18032` |
-| 09-12 17:49 | 真机取证：日志抓到 12 次并发 resyncSessionsIndexV4 | 根因锁定 | `docs/BUGFIXES.md` |
-| 09-12 17:35 | 接手，只读核实交接书与实际状态 | 交接书准确，补充 3 处未提的硬事实（无 remote / 未推 APK / status 干净） | 本文「五、风险」 |
-| 09-12 17:35 | 建立本班交接文档 `docs/HANDOVER-Z.md` | 完成 | 本文 |
-| 09-12 17:21 | （上一班）修复 RangeError | 已提交，待真机复测 | `dd47e13` |
-| 09-12 16:42 | （上一班）流式区出列表架构改造 | 已提交 | `836b146` |
+| 09-18 02:07 | 修「聊天记录加载不出来」（信封解包）+ 附件上传 | 122 测试全过，已推 | `c8f020f` |
+| 09-18 01:54 | 补询问/审批面板（不渲染会话永久卡死） | 94 测试全过，已推 | `33eb89e` |
+| 09-18 01:49 | Web 第一批：会话加载/刷新/列表/聊天记录/发送/停止 | 66 测试全过，已推 | `170d6d6` |
+| 09-18 01:36 | 建 Web 功能地图（13 域 112 交互点，锚定后台接口+数据变化） | 完成，已推 | `5f650cd` |
+| 09-18 01:30 | 用户定方向：Flutter 弃用、Web 为主、适配移动端 | 记录在案 | 本文「零」 |
+| 09-18 01:20 | 用户交办：全权接手 + 三步法拆解全部功能按钮 | 已复述待确认 | `memory/2026-09-18.md` |
+| 09-12 20:47 | 第四次 `.git` 损坏事故 → 重建仓库 + 首次接上 remote | 恢复完成 | 见「四」第 14 条 |
+| 09-12 17:58 | 修复「翻页触发 resync 风暴」（聊天记录自己翻回最开头） | 双绿（213 测试） | `5c18032`（**已随事故丢失**） |
 
-**【上一班遗留的未验证项 —— 接手者必测】**
-- RangeError 修复后的真机滑动复测（**最高优先**）
-- 流式回复落定瞬间是否平滑（面板 → 列表回插）
-- 消息长按选择/复制三件套
-- 排队消息折叠栏行为
-- 通知四渠道（铃声/震动开关）、跨项目任务完成通知（BUG-35 修复验证）
-- 右上角活动按钮已删 → 底部「任务」槽是唯一入口
+**【遗留未验证项 —— 接手者必测】**
+- Web 端真机复测（上面 5 个复测点，**最高优先**）
+- Flutter 侧的 8 项真机验收清单仍在 `docs/ROADMAP.md` 末尾 ——
+  **但 Flutter 已弃用，这些项转为「Web 端对应功能是否达标」的检查表**
 
 ---
 
@@ -141,12 +141,12 @@ RangeError (length): Invalid value: Only valid value is 0: 1
 
 | 项 | 值 |
 |---|---|
-| 代码库 | `D:\tools\zremote-new`（Flutter，Git 单分支 `master`） |
+| 主战场 | `D:\tools\zremote-new\web`（Vue 3 + Pinia + Vite + TS） |
+| Flutter 参照（冻结） | `D:\tools\zremote-new\lib`（**不要删，不要开发**） |
+| 参考实现（**协议不同**） | `D:\workspace\zcode-dev\web`（React；跑的是 zcode-server 的 REST 协议，**协议层不可复用**，UI/交互模式可参考） |
 | 旧仓库 | `D:\tools\zremote`（**已封存，禁止读写**） |
-| 参考项目 | `D:/zcode-dev/app`（Flutter，滚动方案上游参照） |
 | 本机 IP | **192.168.31.194**（WLAN；网络变动需重新确认） |
-| APK 发布 | `http://192.168.31.194:8777/app-release.apk` |
-| APK 路径 | `build\app\outputs\flutter-apk\app-release.apk` |
+| Web 启动 | 双击 `web\启动.bat`（`npm run dev -- --host`，手机用 Network 地址） |
 | 真机 | Redmi Turbo 3，adb id `4b2a7996`，分辨率 1220x2712 @480dpi |
 | adb 路径 | `D:/Android/platform-tools/adb.exe` |
 | 桌面日志 | `C:\Users\chengge\.zcode\v2\logs\YYYY-MM-DD.log`（grep 加 `-a`） |
@@ -160,13 +160,11 @@ RangeError (length): Invalid value: Only valid value is 0: 1
 
 ## 四、高危坑（踩过至少一次，血泪）
 
-1. **`flutter test` 不绕过代理 = 全线假失败**（见「零」节）。`no_proxy` 是硬要求。
+1. **`flutter test` 不绕过代理 = 全线假失败**。`no_proxy` 是硬要求。
 2. **禁 `git push --force`**；单分支 `master` 小步提交，中文 message。
-3. **双绿才提交**：`flutter analyze` 0 问题 **且** `flutter test` 全过。不过不提交。
-4. **交付必须重打 APK 并推 8777**：`build-flutter-apk.ps1`（完整打包）。
-   红线：`build-apk.ps1`（gradlew 直连）**跳过 Dart 编译**，只可用于原生层增量验证，禁止用于交付。
+3. **双绿才提交**：Web 端 = `npm run typecheck` 0 错误 **且** `npm test` 全过；Flutter 端 = `flutter analyze` 0 **且** `flutter test` 全过。不过不提交。
+4. **高频提交**（用户 2026-09-18 明确要求「高频构建提交」）：每完成一个可验证的小块就提交 + push。
 5. **给用户的链接必须是纯文本代码框** —— 用户强调过多次「链接要直接可以复制」。
-   本机预览区可能拿不到剪贴板权限，正文里要附可手动选中的纯文本 URL 兜底。
 6. **修任何东西先取证再动手**：桌面端行为反解 app.asar；DB 拷副本查；日志 `grep -a`。
    **禁止凭印象写协议代码** —— 新接口第一次接入就实测（BUG-35 教训）。
 7. **`workspaceScopes` 必须是对象数组，不是字符串数组**（BUG-35，发字符串会让桌面
@@ -174,17 +172,29 @@ RangeError (length): Invalid value: Only valid value is 0: 1
 8. **同一工作区禁止多 Agent 并发 git 操作**（旧仓库 `.git` 损坏的最大嫌疑）。
 9. **`patch` 写文档后必读回校验**：曾出现写入内容被环境改写/截断。
 10. **手机装机用 `install -r` 保留数据** —— 配对信息不丢，省一次重新配对。
-11. **`build-flutter-apk.ps1` 在 WorkBuddy 会话里跑不通**（2026-09-12 实测）：
-    脚本内部用 `Start-Process` 调 flutter，被会话安全策略拦（"Start-Process with a
-    shell/interpreter target spawns a child process that bypasses validation"）。
-    绕过三连坑：`& flutter ...` 解析成无扩展名的 `D:\flutter\bin\flutter` →
-    `CantActivateDocumentInPipeline`；`cmd.exe` 也被拦。
-    **可用解**：`& "D:\flutter\bin\flutter.bat" build apk --release *> flutter-build.log`
-    （`.bat` 直调 + `*>` 重定向），然后手动写 `flutter-build.done`。
-12. **release 包拿不到首异常明细**：真机 logcat 只会打
-    `Another exception was thrown: Instance of 'DiagnosticsProperty<void>'`，
-    首异常的正文被 tree-shake 掉。要定位必须加全局 `FlutterError.onError`
-    写日志（改代码，需用户点头）。**优先走"桌面日志取证"这条路**（见第六节）。
+11. **`build-flutter-apk.ps1` 在 WorkBuddy 会话里跑不通**：脚本内用 `Start-Process` 调
+    flutter，被会话安全策略拦。可用解：`& "D:\flutter\bin\flutter.bat" build apk --release *> log`。
+    （Flutter 已弃用，此条仅存档。）
+12. **release 包拿不到首异常明细**：logcat 只会打
+    `Another exception was thrown: Instance of 'DiagnosticsProperty<void>'`。
+    要定位必须加全局 `FlutterError.onError` 写日志。（Flutter 已弃用，此条仅存档。）
+13. **⚠️ 非安全上下文（局域网 http）能力被砍**（2026-09-18 实证，**影响移动端主要用法**）：
+    `crypto.subtle` 与 `crypto.randomUUID` **只在 https / localhost 可用**，
+    手机连 `http://192.168.x.x:5173` 时两者都是 `undefined`。
+    连带影响：
+    - `crypto.randomUUID()` 直接抛 → 已用 `getRandomValues` 自拼 v4 降级
+    - 附件 SHA-256 校验算不出 → 已用纯 JS 实现降级（NIST 向量测试钉住）
+    - **`Notification` API 与 `Service Worker` 直接不可用** → 通知、PWA 安装**做不了**
+    对策：要通知能力必须走 https（自签证书 / mkcert / 公网部署），
+    或者接受「Web 端无后台通知」。**这是硬约束，不是能绕的 bug。**
+14. **`.git` 事故已发生四次**（09-11 三次 + 09-12 一次），模式一致：
+    写操作 → `.git/refs/` 整目录被删 + 对象库被裁。真凶未定位。
+    **硬规矩**：任何 `.git` 写操作前先把工作区快照到仓库外，并校验；
+    发现仓库无 remote 立刻停下来处理（09-12 就是无 remote 裸奔 7 小时，丢了 6 个提交）。
+    详见 `~/.workbuddy-ai/MEMORY.md` 的「.git 写操作前先做工作区快照」。
+15. **桌面端会自动升级并删接口**（2026-09-17 实证）：`prepareWorkspace(scope)` 已被移除
+    （调用即 `Method not found`），改调 `getTaskConfigOptions({taskId})`。
+    **客户端必须对每个方法都能优雅降级**，且每接一个接口都要实测。
 
 ---
 
@@ -192,12 +202,12 @@ RangeError (length): Invalid value: Only valid value is 0: 1
 
 | # | 风险/待办 | 说明 | 建议 |
 |---|---|---|---|
-| 1 | ~~**仓库无 remote**~~ ✅ **已解决（2026-09-13 销项）** | GitHub 公开仓已建成并推送：<https://github.com/cheng1212/zremote>（分支标准 `master`，HEAD 同本地）。推送前做过密钥扫描，无泄露 | 异地备份已生效；每个节点（修 bug / 打 APK / 收工）记得 `git push`。推送需 Clash（127.0.0.1:7897）在运行 |
-| 2 | ~~APK 是否已推给用户~~ ✅ **已分发，待真机验收** | 最新 APK（含全部修复）已在 8777 分发：`http://192.168.31.194:8777/app-release.apk`（~56.9MB） | 用户装机后按 `docs/ROADMAP.md` 末尾 8 项清单逐项验收，通过后销项 |
-| 3 | 1 分钟提醒 automation | 桌面端可能仍在跑，会往会话里塞消息 | 测试流式时是天然素材；**用户没让删就别删** |
-| 4 | thinking/reasoning 行与工具卡仍在列表内 | 增长小、可接受 | 记录在案，暂不动 |
-| 5 | 极端长文流式面板占大半屏 | 与参考实现 zcode-dev 一致 | 落定即恢复，暂不动 |
-| 6 | 通知冷启动点击不跳转 | 无后台 isolate，平台限制 | `KNOWN-LIMITS.md` 已记 |
+| 1 | **Web 端真机未复测** | 代码层全绿，但用户还没在手机上验证过 | 最高优先，先推给用户复测 |
+| 2 | **通知能力缺失** | 见「四」第 13 条，受 https 硬约束 | 等用户拍板：自签证书 / 公网部署 / 接受无通知 |
+| 3 | **Flutter 24,021 行的去留** | 已冻结但未删，占仓库体积 | **不要擅自删**——它是重写图纸。等 Web 功能对齐后再议 |
+| 4 | **Web 端无 CI** | `origin` 已配 GitHub，但 `.github/workflows/` 不存在 | 可补（优化方案 T2 有 Flutter 版现成经验） |
+| 5 | **1 分钟提醒 automation** | 桌面端可能仍在跑，会往会话里塞消息 | 测试流式时是天然素材；**用户没让删就别删** |
+| 6 | **协议双端一致性测试** | TS/Dart 的 CAS 集合有共享 fixture 锁（`protocol-commands.test.ts`），但仅此一项 | 其余集合（ROW_TARGET 已有）可继续补 |
 
 ---
 
@@ -205,52 +215,57 @@ RangeError (length): Invalid value: Only valid value is 0: 1
 
 - **先复述需求再动手**，不确认不开工（用户着急时会授权直接做，但复述不可免）
 - **只读排查在前**；根因 + 方案报给用户，**点头才改代码**
-- 用户说 **「继续/不要停」就是字面意思**，别停下来问
+- 用户说 **「继续 / 不要停 / 直接不停」就是字面意思**，别停下来问；
+  他说「不在电脑边」时更不要问，做完留报告等他看
+- **产出型任务（写作、提示词、设计、方案）一律先访谈收敛再交付**，不许自己拍板
 - 需要用户配合的（点手机弹窗、给配对码、断开手机占用）**直接说清楚要他做什么**
-- 用户报障多为截图/录屏/一句话，**根因常在桌面端或协议层**，App 层只是症状 —— 别急着改 UI
+- 用户报障多为截图/录屏/一句话，**根因常在桌面端或协议层**，App/Web 层只是症状 —— 别急着改 UI
 - **对用户汇报：先结论，再证据；不确定就说不确定，不许编**
 - 每个 bug/改进在 `docs/BUGFIXES.md` 登记一条（现象/取证/根因/修复/验证/教训）
-- 活文档改相关处要同步：`BUGFIXES.md`、`SCAN-MATRIX.md`、`FEATURE-INVENTORY.md`、`KNOWN-LIMITS.md`、`AGENTS.md`
+- 活文档改相关处要同步：`BUGFIXES.md`、`SCAN-MATRIX.md`、`FEATURE-INVENTORY.md`、
+  `WEB-FEATURE-MAP.md`、`KNOWN-LIMITS.md`、`AGENTS.md`
 
 ---
 
 ## 七、常用命令速查
 
 ```bash
-cd D:/tools/zremote-new
+# —— Web 端（主战场）——
+cd D:/tools/zremote-new/web
+npm run typecheck                 # 必须 0 错误
+npm test                          # 必须全过（当前 122）
+npm run build                     # vue-tsc + vite build
+npm run dev -- --host             # 手机可用局域网 IP 访问（或双击 启动.bat）
 
-# —— 验证（必须双绿）——
+# —— Flutter 端（仅查参照实现时）——
+cd D:/tools/zremote-new
 flutter analyze
 no_proxy='localhost,127.0.0.1,::1' NO_PROXY='localhost,127.0.0.1,::1' flutter test
 
-# —— 构建（交付用）——
-powershell -File build-flutter-apk.ps1
+# —— git（高频提交 + 立刻推）——
+git add -A && git commit -m "中文消息"
+git push origin master            # 需要网络；本地 bare 用 no_proxy='*'
 
 # —— 真机 ——
-D:/Android/platform-tools/adb.exe -s 4b2a7996 install -r D:/tools/zremote-new/build/app/outputs/flutter-apk/app-release.apk
 D:/Android/platform-tools/adb.exe -s 4b2a7996 shell am start -n com.example.zremote/.MainActivity
-D:/Android/platform-tools/adb.exe -s 4b2a7996 exec-out screencap -p > shot.png
-D:/Android/platform-tools/adb.exe -s 4b2a7996 shell input swipe 610 2200 610 700 250
 D:/Android/platform-tools/adb.exe -s 4b2a7996 logcat -v time | grep flutter
 
 # —— 取证 ——
-grep -a "zcode-task\." C:/Users/chengge/.zcode/v2/logs/2026-09-12.log | grep -av "OK ("
-
-# —— 8777 卡死则重启（单线程 http.server 会挂；cwd 必须是 flutter-apk 目录）——
-powershell -NoProfile -Command "Start-Process -FilePath 'D:/anaconda3/python.exe' -ArgumentList '-m','http.server','8777','--bind','0.0.0.0' -WorkingDirectory 'D:/tools/zremote-new/build/app/outputs/flutter-apk' -WindowStyle Hidden"
+grep -a "zcode-task\." C:/Users/chengge/.zcode/v2/logs/2026-09-18.log | grep -av "OK ("
 ```
 
 ---
 
 ## 八、交班仪式（下班前必做，缺一不可）
 
-离班前完成以下五项，接手者才不用考古：
+离班前完成以下六项，接手者才不用考古：
 
 1. **更新本文「一、当前主线状态」** —— 写清卡点、下一步、验证到哪一步
 2. **追加本文「二、本班台账」** —— 一行一条，含提交号
-3. **提交台账** —— 每个改动双绿后立刻提交（中文 message）
-4. **登记 BUGFIXES.md** —— 本班每个 bug/改进一条，格式照已有条目
-5. **同步 AGENTS.md** —— 项目行为有变化就更新，并更新验证日期
+3. **提交台账** —— 每个改动双绿后立刻提交 + push（中文 message）
+4. **登记 `docs/BUGFIXES.md`** —— 本班每个 bug/改进一条，格式照已有条目
+5. **同步 `docs/WEB-FEATURE-MAP.md`** —— Web 端功能完成度变化就更新
+6. **同步 `AGENTS.md`** —— 项目行为有变化就更新，并更新验证日期
 
 > **交接的验收标准**：接手者读完「零、三分钟上手」+「一、当前主线状态」就能直接开工，
 > **不需要问你任何问题**。做不到就说明交班没写完整。

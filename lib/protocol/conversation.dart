@@ -753,6 +753,12 @@ class ConversationV4 {
         {'taskId': taskId},
       ], timeout: const Duration(seconds: 20));
 
+  /// 会话/子代理当前实际使用的模型（新版桌面端按 taskId 查会话设置）。
+  Future<Object?> getTaskModelSelection(String taskId) =>
+      _ch.call(Chan.task, 'getTaskModelSelection', [
+        {'taskId': taskId},
+      ], timeout: const Duration(seconds: 15));
+
   /// `skills.list` — 当前工作区已启用的技能。
   Future<List<Map<String, dynamic>>> skills() async {
     try {

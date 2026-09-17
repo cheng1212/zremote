@@ -1911,6 +1911,28 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
     await loadAutomations();
   }
 
+  /// 查某个会话/子代理当前实际使用的模型（getTaskModelSelection）。
+  /// 返回 'providerId/modelId' 原文；拿不到给 null。
+  Future<String?> taskModelSelection(String taskId) async {
+    final conv = this.conv;
+    if (conv == null) return null;
+    try {
+      final res = await conv.getTaskModelSelection(taskId);
+      if (res is String && res.trim().isNotEmpty) return res.trim();
+      if (res is Map) {
+        final cur = res['current'] ?? res['model'] ?? res['modelSelection'];
+        if (cur is String && cur.trim().isNotEmpty) return cur.trim();
+        if (cur is Map) {
+          final s = '${cur['providerId'] ?? ''}/${cur['modelId'] ?? ''}';
+          if (s.isNotEmpty && s != '/') return s;
+        }
+      }
+    } on Object {
+      // 查询失败不阻塞详情面板
+    }
+    return null;
+  }
+
   /// 会话右上角直建定时任务：任务名=会话名，内容用户原文直输不经转述。
   /// 先带 targetTaskId 绑定当前会话；桌面端不认该字段时去参重试保成功。
   Future<void> createAutomationForSession({

@@ -2646,6 +2646,133 @@ class _ChatPageState extends State<ChatPage> {
     return b.toString();
   }
 
+  /// 子代理详情面板：信息 + 实时模型查询 + 停止操作。
+  void _showSubagentDetail(SubagentLiveView s) {
+    final modelTag = ValueNotifier<String>(s.model);
+    if (s.childSessionId.isNotEmpty) {
+      widget.app
+          .taskModelSelection(s.childSessionId)
+          .then((m) {
+            if (m != null && m.isNotEmpty) modelTag.value = m;
+          })
+          .catchError((_) {});
+    }
+    Widget row(String k, String v) => Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 64,
+            child: Text(
+              k,
+              style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+                color: ZT.inkSoft,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              v,
+              style: const TextStyle(fontSize: 12, height: 1.35),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: ZT.bg,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetCtx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                '子代理详情',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
+              ),
+              const SizedBox(height: 10),
+              row('类型', s.type.isEmpty ? '—' : s.type),
+              row('状态', s.statusLabel),
+              if (s.title.isNotEmpty) row('任务', s.title),
+              if (s.summary.isNotEmpty) row('摘要', s.summary),
+              ValueListenableBuilder<String>(
+                valueListenable: modelTag,
+                builder: (_, m, _) => row(
+                  '当前模型',
+                  m.isEmpty ? '查询中…（服务端未上报则查不到）' : m,
+                ),
+              ),
+              row('子会话', s.childSessionId.isEmpty ? '—' : s.childSessionId),
+              const SizedBox(height: 6),
+              const Text(
+                '模型逻辑：子代理默认继承主会话当前模型；只有派生它的 '
+                'Agent/Task 调用显式指定 model 时才用别的（贵模型多是这样进来的）。'
+                '协议无「暂停」单个子代理的方法，只能停止。',
+                style: TextStyle(fontSize: 11.5, color: ZT.inkFaint),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  if (s.childSessionId.isNotEmpty)
+                    Expanded(
+                      child: BigButton(
+                        label: '停止此子代理',
+                        onPressed: () async {
+                          Navigator.pop(sheetCtx);
+                          try {
+                            await widget.app.stop(s.childSessionId);
+                            if (mounted) {
+                              flashMessage(context, '已向子代理发送停止请求');
+                            }
+                          } on Object catch (e) {
+                            if (mounted) {
+                              flashMessage(context, '停止失败：$e', error: true);
+                            }
+                          }
+                        },
+                      ),
+                    ),
+                  if (s.childSessionId.isNotEmpty) const SizedBox(width: 10),
+                  Expanded(
+                    child: BigButton(
+                      label: '停止整个回合',
+                      onPressed: () async {
+                        final sid = _sid;
+                        Navigator.pop(sheetCtx);
+                        if (sid == null) return;
+                        try {
+                          await widget.app.stop(sid);
+                          if (mounted) {
+                            flashMessage(context, '已发送停止请求（整个回合）');
+                          }
+                        } on Object catch (e) {
+                          if (mounted) {
+                            flashMessage(context, '停止失败：$e', error: true);
+                          }
+                        }
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   /// 右上角「新建定时任务」：选频率 + 内容自输，任务名=会话名，直建不经转述。
   Future<void> _showCreateCronSheet() async {
     final sid = _sid;
@@ -2768,7 +2895,9 @@ class _ChatPageState extends State<ChatPage> {
           ),
         // 快照 subagents.running[]：桌面端专门上报的实时子代理
         for (final s in live)
-          Padding(
+          GestureDetector(
+            onTap: () => _showSubagentDetail(s),
+            child: Padding(
             padding: const EdgeInsets.only(bottom: 8),
             child: Container(
               padding: const EdgeInsets.all(11),
@@ -2923,6 +3052,7 @@ class _ChatPageState extends State<ChatPage> {
                   ),
                 ],
               ),
+            ),
             ),
           ),
         // Agent/Task 工具调用形式的运行中子代理

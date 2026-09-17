@@ -32,6 +32,11 @@ import {
   type SessionCard,
 } from '../lib/sessions'
 import { isBusyPhase, isProducingPhase, isErrorPhase, errorValueText } from '../lib/phase'
+import {
+  buildAskAnswersPayload,
+  type AskAnswer,
+  type AskQuestion,
+} from '../lib/ask'
 
 export type RelayUiState =
   | 'idle'
@@ -156,6 +161,15 @@ export const useAppStore = defineStore('app', {
 
     canLoadOlder(state): boolean {
       return state.chat != null && hasMoreOlder(state.chat) && !state.loadingOlder
+    },
+
+    /**
+     * 待回答的交互（询问 / 审批）。
+     * **非空时服务端在等回答、回合不会继续**——不渲染面板会话就永久卡住。
+     */
+    pendingInteractions(state): Record<string, unknown>[] {
+      const list = state.chat?.snapshot?.['pendingInteractions']
+      return Array.isArray(list) ? (list as Record<string, unknown>[]) : []
     },
   },
 
@@ -464,6 +478,55 @@ export const useAppStore = defineStore('app', {
       } catch (e) {
         this.sendError = errorValueText(e) ?? String(e)
         this.log(`[conv] stop 失败: ${this.sendError}`)
+      }
+    },
+
+    // ────────────────────── 询问 / 审批（不回传会话会卡死） ──────────────────────
+
+    /**
+     * 回答 questions 类交互。
+     * 形状：`{action:'accept', content:{answers:[{question:题干原文, selected:[…]}]}}`
+     * —— answers 是数组、键是**题干原文**（服务端没有 id）。
+     */
+    async resolveQuestions(
+      interactionId: string,
+      questions: AskQuestion[],
+      answers: AskAnswer[],
+    ): Promise<void> {
+      const conv = this.conv
+      const sid = this.chatMeta?.sessionId
+      if (!conv || !sid || !interactionId) return
+      const payload = buildAskAnswersPayload(questions, answers)
+      try {
+        await conv.resolveInteraction(sid, interactionId, {
+          action: payload.action,
+          content: payload.content,
+        })
+        this.log(`[conv] resolveInteraction(questions) ${interactionId}`)
+      } catch (e) {
+        this.sendError = errorValueText(e) ?? String(e)
+        this.log(`[conv] resolveInteraction 失败: ${this.sendError}`)
+      }
+    },
+
+    /** 回答 permission 类交互（用 optionId 回传）。 */
+    async resolvePermission(
+      interactionId: string,
+      optionId: string,
+      freeText?: string,
+    ): Promise<void> {
+      const conv = this.conv
+      const sid = this.chatMeta?.sessionId
+      if (!conv || !sid || !interactionId) return
+      try {
+        await conv.resolveInteraction(sid, interactionId, {
+          optionId,
+          ...(freeText ? { freeText } : {}),
+        })
+        this.log(`[conv] resolveInteraction(permission) ${interactionId} → ${optionId}`)
+      } catch (e) {
+        this.sendError = errorValueText(e) ?? String(e)
+        this.log(`[conv] resolveInteraction 失败: ${this.sendError}`)
       }
     },
 

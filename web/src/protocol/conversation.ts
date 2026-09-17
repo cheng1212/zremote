@@ -313,4 +313,35 @@ export class ConversationV4 {
   stop(sessionId: string): Promise<unknown> {
     return this.sendCommand(sessionId, 'stop', {}, { baseRevision: 0, logEpoch: null })
   }
+
+  /**
+   * 回答询问 / 审批。
+   *
+   * **服务端在 `pendingInteractions` 非空时在等这个回答，回合不会继续**——
+   * 不回传会话就永久卡住。两个分支形状不同（BUG-17 实测）：
+   * · questions：`{action:'accept', content:{answers:[{question, selected:[…]}]}}`
+   * · permission：`{optionId}`
+   * 两者都用同一个 `answer` 包一层。
+   */
+  resolveInteraction(
+    sessionId: string,
+    interactionId: string,
+    answer: {
+      optionId?: string
+      freeText?: string
+      action?: string
+      content?: Record<string, unknown>
+    },
+  ): Promise<unknown> {
+    const payload: Record<string, unknown> = { interactionId, answer: {} }
+    const a = payload['answer'] as Record<string, unknown>
+    if (answer.optionId != null) a['optionId'] = answer.optionId
+    if (answer.freeText != null) a['freeText'] = answer.freeText
+    if (answer.action != null) a['action'] = answer.action
+    if (answer.content != null) a['content'] = answer.content
+    return this.sendCommand(sessionId, 'resolveInteraction', payload, {
+      baseRevision: 0,
+      logEpoch: null,
+    })
+  }
 }

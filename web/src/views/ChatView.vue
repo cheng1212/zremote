@@ -23,6 +23,7 @@ import {
   shouldKeepPinning,
 } from '../lib/scroll'
 import { isProducingPhase } from '../lib/phase'
+import AskPanel from '../components/AskPanel.vue'
 import type { ConvRow } from '../lib/convRows'
 
 const app = useAppStore()
@@ -369,6 +370,11 @@ function isExpanded(r: ConvRow, i: number): boolean {
     <div v-if="app.chatError" class="strip strip--error">{{ app.chatError }}</div>
     <div v-if="app.sendError" class="strip strip--error">{{ app.sendError }}</div>
 
+    <!-- 询问 / 审批：非空时服务端在等回答，不回传会话就卡死 -->
+    <div v-if="app.pendingInteractions.length > 0" class="ask-host">
+      <AskPanel />
+    </div>
+
     <footer class="composer">
       <textarea
         v-model="input"
@@ -659,6 +665,10 @@ function isExpanded(r: ConvRow, i: number): boolean {
   color: var(--rose);
   border-color: var(--rose);
   background: rgba(229, 72, 77, 0.1);
+}
+.ask-host {
+  padding: 10px 12px 0;
+  background: var(--bg);
 }
 .composer {
   display: flex;

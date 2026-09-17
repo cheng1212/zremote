@@ -17,6 +17,8 @@ import {
   M_SUBSCRIBE_CONV,
   M_RESYNC_CONV,
   M_SUBSCRIBE_INDEX,
+  M_UNSUBSCRIBE_INDEX,
+  M_RESYNC_INDEX,
   EV_CONV_FRAME,
   EV_INDEX_FRAME,
   M_ROWS_RANGE,
@@ -191,6 +193,7 @@ export class ConversationV4 {
   subscribeIndex(onFrame: (frame: Frame) => void): { cancel: () => void } {
     const scope = this.bridge.scope
     let cancelListener: (() => void) | null = null
+    let subscriptionId: string | null = null
     let stopped = false
     void (async () => {
       await this.handshake()
@@ -201,17 +204,55 @@ export class ConversationV4 {
         (data) => onFrame((data as Frame) ?? {}),
         scope,
       )
+      // ⚠️ 订阅**不能**带 runtimePolicy:'existing-only'——该策略语义是
+      // 「只准挂到已经在跑的运行时上」，目标工作区的 agent 运行时没在跑时
+      // 桌面端会在 1ms 内直接拒绝（ZCode Agent runtime is not running），
+      // 切项目必然报错（BUG-09）。不传则桌面端走 start-if-needed。
       const res = (await this.ch.call(CONV_CHANNEL, M_SUBSCRIBE_INDEX, [
         scope,
       ])) as Record<string, unknown> | null
-      this.onLog?.(`[v4] index subscribed: ${JSON.stringify(res?.['ack'] ?? {})}`)
+      const ack = (res?.['ack'] as Record<string, unknown> | undefined) ?? null
+      subscriptionId = (ack?.['subscriptionId'] as string | undefined) ?? null
+      this.onLog?.(`[v4] index subscribed id=${subscriptionId}`)
     })().catch((e) => this.onLog?.(`[v4] index subscribe failed: ${e}`))
     return {
       cancel: () => {
         stopped = true
         cancelListener?.()
+        if (subscriptionId) {
+          // 退订/重订阅**保持** existing-only：清理与断线恢复路径不该顺手
+          // 启动运行时。短超时尽力而为，旧桥已死时必然失败，别等满默认超时。
+          void this.ch
+            .call(
+              CONV_CHANNEL,
+              M_UNSUBSCRIBE_INDEX,
+              [{ ...scope, subscriptionId, runtimePolicy: 'existing-only' }],
+              IPC_UNSUBSCRIBE_TIMEOUT_MS,
+            )
+            .catch(() => {})
+        }
       },
     }
+  }
+
+  /** 索引断档重同步（单飞闸，同会话）。 */
+  private indexGate = new ResyncGate()
+
+  resyncIndex(): void {
+    if (!this.indexGate.tryAcquire()) {
+      this.onLog?.('[v4] index resync in flight, coalesced')
+      return
+    }
+    const scope = this.bridge.scope
+    void this.ch
+      .call(
+        CONV_CHANNEL,
+        M_RESYNC_INDEX,
+        [{ ...scope, runtimePolicy: 'existing-only', forceSnapshot: true }],
+        30_000,
+      )
+      .catch((e) => this.onLog?.(`[v4] index resync failed: ${e}`))
+      .finally(() => this.indexGate.release())
   }
 
   /** 断档重同步：ResyncGate 保证一次在途时后续合流（resync 风暴断环）。 */

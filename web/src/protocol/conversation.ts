@@ -8,6 +8,7 @@ import type { Bridge } from './remoteSession'
 import { ChannelClient } from './channelClient'
 import { Subscription } from './subscription'
 import { sha256Hex } from '../lib/crypto'
+import { base64ToBytes } from '../lib/fragments'
 import {
   CONV_CHANNEL,
   CONV_PROTOCOL_VERSION,
@@ -28,6 +29,7 @@ import {
   M_ATTACHMENT_BEGIN,
   M_ATTACHMENT_CHUNK,
   M_ATTACHMENT_COMMIT,
+  M_ATTACHMENT_READ,
   ATTACHMENT_CHUNK_BYTES,
   CAS_COMMANDS,
   ROW_TARGET_COMMANDS,
@@ -49,6 +51,17 @@ function toBase64(bytes: Uint8Array): string {
     bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK))
   }
   return btoa(bin)
+}
+
+/** 拼接多段字节（读回附件时按片累积）。 */
+function concatBytes(parts: Uint8Array[], total: number): Uint8Array {
+  const out = new Uint8Array(total)
+  let off = 0
+  for (const p of parts) {
+    out.set(p, off)
+    off += p.length
+  }
+  return out
 }
 
 export interface ConvRow extends Frame {
@@ -368,5 +381,63 @@ export class ConversationV4 {
       throw new Error('attachmentPut: commit 未返回 ref')
     }
     return { ref, fileName: opts.fileName, mime: opts.mime, bytes: totalBytes }
+  }
+
+  /**
+   * 读回附件字节（图片预览 / 文件下载用）。
+   *
+   * ⚠️ **这是网页端唯一的「读文件」途径**：浏览器有安全沙箱，
+   * 读不到本地路径（`D:\…` 打不开、`file://` URL 也加载不了，Chrome 直接报
+   * "Not allowed to load local resource"）。Flutter 是原生 App 才有文件系统
+   * 权限。所以正解只能是**按 ref 走协议拉字节**，本地拼成 Blob 再显示。
+   *
+   * 服务端按 offset/limit 分片返回；`nextOffset <= offset` 或
+   * `offset >= totalBytes` 即结束。**64MB 上限**防服务端谎报大小把内存撑爆
+   * （对齐移动端 `attachmentRead` 的护栏）。
+   */
+  async attachmentRead(
+    sessionId: string,
+    ref: string,
+  ): Promise<{ bytes: Uint8Array; mediaType: string | null }> {
+    await this.handshake()
+    const MAX_TOTAL_BYTES = 64 * 1024 * 1024
+    const parts: Uint8Array[] = []
+    let total = 0
+    let offset = 0
+    let mediaType: string | null = null
+
+    for (let round = 0; round < 1024; round++) {
+      const res = (await this.ch.call(CONV_CHANNEL, M_ATTACHMENT_READ, [
+        {
+          ...this.bridge.scope,
+          sessionId,
+          ref,
+          offset,
+          limit: ATTACHMENT_CHUNK_BYTES,
+        },
+      ])) as Record<string, unknown> | null
+      if (!res || typeof res !== 'object') break
+
+      if (mediaType == null && typeof res['mediaType'] === 'string') {
+        mediaType = res['mediaType'] as string
+      }
+      const data = res['dataBase64']
+      if (typeof data === 'string' && data) {
+        const bytes = base64ToBytes(data)
+        parts.push(bytes)
+        total += bytes.length
+      }
+      if (total > MAX_TOTAL_BYTES) {
+        this.onLog?.('[v4] attachmentRead aborted: exceeds 64MB')
+        break
+      }
+      const next = typeof res['nextOffset'] === 'number' ? (res['nextOffset'] as number) : null
+      const totalBytes = typeof res['totalBytes'] === 'number' ? (res['totalBytes'] as number) : null
+      if (next == null || next <= offset) break
+      offset = next
+      if (totalBytes != null && offset >= totalBytes) break
+    }
+
+    return { bytes: concatBytes(parts, total), mediaType }
   }
 }

@@ -24,7 +24,9 @@ import {
 } from '../lib/scroll'
 import { isProducingPhase } from '../lib/phase'
 import { MAX_FILES_PER_PICK, formatBytes } from '../lib/upload'
+import { rowAttachments, type AttItem } from '../lib/attachments'
 import AskPanel from '../components/AskPanel.vue'
+import AttachmentBlock from '../components/AttachmentBlock.vue'
 import type { ConvRow } from '../lib/convRows'
 
 const app = useAppStore()
@@ -265,6 +267,10 @@ function onKeydown(e: KeyboardEvent): void {
 function kindOf(r: ConvRow): string {
   return String(r['kind'] ?? '')
 }
+/** 行内附件（用户消息在 `row.attachments`）。 */
+function attsOf(r: ConvRow): AttItem[] {
+  return rowAttachments(r)
+}
 function textOf(r: ConvRow): string {
   return String(r['text'] ?? '')
 }
@@ -330,7 +336,12 @@ function isExpanded(r: ConvRow, i: number): boolean {
         <template v-for="(r, i) in rows" :key="rowKey(r, i)">
           <!-- 用户消息 -->
           <div v-if="kindOf(r) === 'userInput'" class="line line--user">
-            <div class="bubble-user">{{ textOf(r) }}</div>
+            <div v-if="textOf(r)" class="bubble-user">{{ textOf(r) }}</div>
+            <AttachmentBlock
+              v-for="a in attsOf(r)"
+              :key="a.ref || a.fileName"
+              :attachment="a"
+            />
           </div>
 
           <!-- 助手正文 -->

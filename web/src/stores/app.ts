@@ -44,6 +44,8 @@ import {
   formatBytes,
   guessMime,
 } from '../lib/upload'
+import { attachmentBlobs } from '../lib/blobCache'
+import { sniffImageMime } from '../lib/attachments'
 
 export type RelayUiState =
   | 'idle'
@@ -112,6 +114,12 @@ export const useAppStore = defineStore('app', {
     uploadErr: '',
     /** 已上传待发送的附件（{ref,fileName,mime,bytes}）。 */
     pendingAttachments: [] as { ref: string; fileName: string; mime: string; bytes: number }[],
+
+    // —— 附件读取（网页端唯一的「读文件」途径） ——
+    /** ref → blob URL（已取回并解码的附件）。 */
+    attachmentUrls: {} as Record<string, string>,
+    attachmentLoading: {} as Record<string, boolean>,
+    attachmentErrors: {} as Record<string, string>,
 
     logs: [] as string[],
   }),
@@ -452,6 +460,7 @@ export const useAppStore = defineStore('app', {
       this.chatMeta = null
       this.sendError = ''
       this.loadingOlder = false
+      this.clearAttachmentState()
     },
 
     /** 上滑翻页：拉更早 60 条，去重前置合并。 */
@@ -641,6 +650,61 @@ export const useAppStore = defineStore('app', {
 
     /** 上传取消旗标（模块级资源，不进 state）。 */
     _cancelUpload: null as (() => void) | null,
+
+    // ────────────── 附件读取（浏览器不能读本地路径，只能走协议） ──────────────
+
+    /**
+     * 取回附件内容并返回可显示的 blob URL。
+     *
+     * **为什么必须走协议**：浏览器安全沙箱不允许网页读本地文件路径
+     * （`D:\…` 读不到、`file://` 加载不了）。Flutter 是原生 App 才有文件系统
+     * 权限，所以它能 `file.readAsBytes()`；Web 只能按 ref 让服务端把字节送回来。
+     * 这不是权限配置问题，是浏览器设计。
+     *
+     * 已取回的走 blob 缓存（命中即返回，不重复拉）。
+     */
+    async loadAttachment(ref: string): Promise<string | null> {
+      if (!ref) return null
+      const cached = attachmentBlobs.get(ref)
+      if (cached) {
+        if (this.attachmentUrls[ref] !== cached) {
+          this.attachmentUrls = { ...this.attachmentUrls, [ref]: cached }
+        }
+        return cached
+      }
+      const conv = this.conv
+      const sid = this.chatMeta?.sessionId
+      if (!conv || !sid) return null
+      if (this.attachmentLoading[ref]) return null
+
+      this.attachmentLoading = { ...this.attachmentLoading, [ref]: true }
+      try {
+        const { bytes, mediaType } = await conv.attachmentRead(sid, ref)
+        if (bytes.length === 0) throw new Error('附件内容为空')
+        // mime 认不出时按魔数补判——相册选的无后缀图常见这种情况，
+        // 不补判就会被当成普通文件显示成 chip。
+        const mime = mediaType || sniffImageMime(bytes) || 'application/octet-stream'
+        const url = attachmentBlobs.put(ref, bytes, mime)
+        this.attachmentUrls = { ...this.attachmentUrls, [ref]: url }
+        return url
+      } catch (e) {
+        const msg = errorValueText(e) ?? String(e)
+        this.attachmentErrors = { ...this.attachmentErrors, [ref]: msg }
+        this.log(`[attach] 读取失败 ${ref}: ${msg}`)
+        return null
+      } finally {
+        const nextLoading = { ...this.attachmentLoading }
+        delete nextLoading[ref]
+        this.attachmentLoading = nextLoading
+      }
+    },
+
+    /** 清掉读取态（切会话时调用——blob 缓存保留，跨会话复用）。 */
+    clearAttachmentState(): void {
+      this.attachmentUrls = {}
+      this.attachmentLoading = {}
+      this.attachmentErrors = {}
+    },
 
     // ────────────────────────── 断开 ──────────────────────────
 

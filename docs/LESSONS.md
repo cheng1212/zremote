@@ -10,6 +10,7 @@
 
 ## 索引
 
+- 2026-09-19 选项传进去就当它在生效——markdown-it 的 validateLink 在 v15 从不被调用 ｜关键词：validateLink 死代码 钩子没被调用 探针 安全属性 测试绿不等于在起作用 markdown-it html:false 协议白名单 XSS
 - 2026-09-13 乐观补偿层必须带对账出口——持久化墓碑让本机永久压住服务端 ｜关键词：墓碑 removedTaskIds 服务端为准 缓存降级 tasksStale sweepDeletions 多端一致性
 - 2026-09-13 锚定断补标记要盖住所有非流式增长——修了翻页漏了快照重同步 ｜关键词：锚定 快照 resync 重同步 oldestRowId 结构性变化 hasClients 滑向历史端
 - 2026-09-11 删除会话复活——deleteTask 只摘任务条目，会话本体要调 deleteSession ｜关键词：删除 复活 deleteSession sessions-index 多设备
@@ -279,3 +280,10 @@
 - 解决：两处补齐（deleteTask 的 deleteSession 还要等切换后再捕获 conv）。BUG-19。
 - 教训：修"某类操作在某条件下失败"时，先枚举**整个操作族**（同 scope 结构、同通道、同写语义的全部成员），逐个核对是否同修；只修报障的那一个，等于把 bug 按成员分摊。掩盖层（墓碑/乐观覆盖）越强的功能，越要主动核对服务端真实效果。
 - 关联：lib/state/app_controller.dart deleteTask/renameTask、docs/BUGFIXES.md BUG-14/19
+
+### [2026-09-19] 选项传进去就当它在生效——markdown-it 的 validateLink 在 v15 从不被调用
+- 现象：给 `new MarkdownIt({ validateLink })` 写了自定义协议白名单，注释还写明"危险协议由我们拦"。跑测试全绿（javascript:/data:/实体写法 都出不来 `<a>`），看起来钩子在工作。
+- 根因：**探针实测**——钩子里 `return true` 全放行，`[a](javascript:alert(1))` 依然不生成链接，且钩子一次都没收到调用（`seen` 始终为空）。拦下来的是 markdown-it 内部的坏协议表；`@types/markdown-it@14` 里甚至没有 `validateLink` 这个字段（构造时报类型错时才露出来）。测试绿 ≠ 我的代码在起作用。
+- 解决：删掉死代码，注释与测试改成如实描述"协议拦截是**库的契约**"，注入面用例保留为升级哨兵（将来若放宽，测试会红而不是静默变不安全）。
+- 教训：凡"我传了个回调/选项，所以行为由我保证"，先加一行 `console.log` 或断点证明它**被调用过**；否则删掉，别留一段看起来在保护、实际从不执行的代码——它比没有更危险，因为下一个读代码的人会以为已经有防线。安全属性也一样：要测"防线在挡"，不是测"结果看着安全"。
+- 关联：web/src/lib/markdown.ts、web/tests/markdown.test.ts、docs/BUGFIXES.md 2026-09-19 批

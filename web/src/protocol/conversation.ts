@@ -26,6 +26,9 @@ import {
   EV_CONV_FRAME,
   EV_INDEX_FRAME,
   M_ROWS_RANGE,
+  M_PLANS,
+  M_FILE_CHANGES,
+  M_FILE_REWIND_PREVIEW,
   M_ATTACHMENT_BEGIN,
   M_ATTACHMENT_CHUNK,
   M_ATTACHMENT_COMMIT,
@@ -215,14 +218,30 @@ export class ConversationV4 {
     return (res?.['rows'] as Frame[] | undefined) ?? []
   }
 
-  /** 发送会话命令（CAS 命令自动带 baseRevision / 行级命令带 baseLogEpoch）。 */
+  /**
+   * 发送会话命令。
+   *
+   * ⚠️ **CAS 是桌面分派层强制的，不是可选的**：宿主侧对 `CAS_COMMANDS` 里的命令
+   * 缺 `baseRevision` 直接抛（错误文案引用 `10-protocol-spec §6.4`），
+   * `ROW_TARGET_COMMANDS` 那批缺 `baseLogEpoch` 同样抛。所以这里**本地先拦**，
+   * 让调用方拿到一句人话，而不是等一次网络往返后收到一个看不懂的远端错误。
+   *
+   * @param sessionId `createSession` 传 null（信封里 sessionId 为 null）
+   */
   async sendCommand(
-    sessionId: string,
+    sessionId: string | null,
     type: string,
     payload: Record<string, unknown>,
-    ctx: { baseRevision: number; logEpoch: string | null },
+    ctx: { baseRevision: number | null; logEpoch: string | null },
+    timeoutMs = 30_000,
   ): Promise<unknown> {
     await this.handshake()
+    if (CAS_COMMANDS.has(type) && typeof ctx.baseRevision !== 'number') {
+      throw new Error(`命令 ${type} 是 CAS 命令，必须携带 baseRevision（取快照的 revision 字段）`)
+    }
+    if (ROW_TARGET_COMMANDS.has(type) && !ctx.logEpoch) {
+      throw new Error(`命令 ${type} 是行级 target 命令，必须携带 baseLogEpoch（取快照的 logEpoch）`)
+    }
     const envelope: Record<string, unknown> = {
       commandId: genId('cmd'),
       clientId: this.clientId,
@@ -233,7 +252,107 @@ export class ConversationV4 {
       payload,
       issuedAt: Date.now(),
     }
-    return this.ch.call(CONV_CHANNEL, M_SEND_COMMAND, [envelope], 30_000)
+    return this.ch.call(CONV_CHANNEL, M_SEND_COMMAND, [envelope], timeoutMs)
+  }
+
+  /**
+   * 新建会话，返回新的 sessionId。
+   *
+   * 语义照抄 Flutter `conversation.dart:321`（唯一蓝本，勿凭印象改）：
+   * · `workspaceId` 传的是**工作区 key**（`workspaceKeyOf(workspace)`），不是路径对象；
+   * · 响应必须是 `{status:'accepted', result:{sessionId}}`，非 accepted 一律当失败——
+   *   远端拒绝（provider 不在册等）也会回 201 成功，只看 promise 通不通会把失败当成功；
+   * · 超时给 90s：建会话可能要冷启动桌面端的 agent 运行时，30s 默认值不够。
+   *
+   * ⚠️ 首条消息**不要**随 `firstInput` 一起提交——Flutter 端 `chat_page.dart:746` 的
+   * 结论是先建空会话、过模型放行闸门后再 `sendText`。带上首条会让"模型被服务端
+   * 回退"时消息已发出去，重试就重复。
+   */
+  async createSession(
+    workspaceId: string,
+    opts?: {
+      config?: Record<string, unknown>
+      runtimeModel?: string
+    },
+  ): Promise<string> {
+    const res = await this.sendCommand(
+      null,
+      'createSession',
+      {
+        workspaceId,
+        ...(opts?.config ? { config: opts.config } : {}),
+        ...(opts?.runtimeModel ? { runtimeModel: opts.runtimeModel } : {}),
+      },
+      { baseRevision: null, logEpoch: null },
+      90_000,
+    )
+    const map = res && typeof res === 'object' ? (res as Record<string, unknown>) : null
+    if (map?.['status'] !== 'accepted') {
+      throw new Error(
+        `createSession 被拒绝：${String(map?.['reasonCode'] ?? map?.['status'] ?? '无响应')} ${String(map?.['message'] ?? '')}`.trim(),
+      )
+    }
+    const result = map?.['result']
+    const sessionId =
+      typeof result === 'string'
+        ? result
+        : result && typeof result === 'object'
+          ? (result as Record<string, unknown>)['sessionId']
+          : undefined
+    if (typeof sessionId !== 'string' || !sessionId) {
+      throw new Error('createSession 已接受但没回 sessionId')
+    }
+    return sessionId
+  }
+
+  /** 计划面板：`conversationPlansV4`。返回形状未逐项实测——交调用方兜底解析。 */
+  async plans(sessionId: string): Promise<unknown> {
+    await this.handshake()
+    return this.ch.call(CONV_CHANNEL, M_PLANS, [{ ...this.bridge.scope, sessionId }], 20_000)
+  }
+
+  /** 本回合文件变更清单。 */
+  async fileChanges(
+    sessionId: string,
+    base?: { revision: number | null; logEpoch: string | null },
+  ): Promise<unknown> {
+    await this.handshake()
+    return this.ch.call(
+      CONV_CHANNEL,
+      M_FILE_CHANGES,
+      [
+        {
+          ...this.bridge.scope,
+          sessionId,
+          ...(typeof base?.revision === 'number' ? { baseRevision: base.revision } : {}),
+          ...(base?.logEpoch ? { baseLogEpoch: base.logEpoch } : {}),
+        },
+      ],
+      20_000,
+    )
+  }
+
+  /** 回滚预览：`{canApply, safeFiles, unsafeFiles, ignoredFiles}`，不落盘。 */
+  async fileRewindPreview(
+    sessionId: string,
+    target: { rowId: number; entityId?: string },
+    base: { revision: number | null; logEpoch: string | null },
+  ): Promise<unknown> {
+    await this.handshake()
+    return this.ch.call(
+      CONV_CHANNEL,
+      M_FILE_REWIND_PREVIEW,
+      [
+        {
+          ...this.bridge.scope,
+          sessionId,
+          target,
+          ...(typeof base.revision === 'number' ? { baseRevision: base.revision } : {}),
+          ...(base.logEpoch ? { baseLogEpoch: base.logEpoch } : {}),
+        },
+      ],
+      20_000,
+    )
   }
 
   async sendText(

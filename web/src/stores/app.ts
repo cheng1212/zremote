@@ -38,6 +38,7 @@ import {
   type AskAnswer,
   type AskQuestion,
 } from '../lib/ask'
+import { checkModelGate } from '../lib/modelGate'
 import {
   MAX_FILE_BYTES,
   exceedsLimit,
@@ -73,8 +74,20 @@ let chatSub: Subscription | null = null
 let indexSub: Subscription | null = null
 /** 首帧兜底计时器：订阅失败时不能让「正在加载」永远挂着。 */
 let chatLoadTimer: ReturnType<typeof setTimeout> | null = null
+/**
+ * 在途 `openSession` 的落地回调。
+ * closeSession / 切工作区会把它要等的会话扔掉——不结掉的话
+ * 草稿发送流程（await openSession）就永久挂在那个 promise 上。
+ */
+let chatFirstFrameSettle: ((v: boolean) => void) | null = null
 /** 在途上传的取消旗标（模块级资源，不进 state、也不进 actions）。 */
 let uploadCancel: (() => void) | null = null
+
+/** 工作区主键：`workspaceKey` 优先，退化到 `workspacePath`（对齐 Flutter `workspaceKeyOf`）。 */
+function workspaceKeyOf(w: Workspace | null | undefined): string {
+  if (!w) return ''
+  return String(w['workspaceKey'] ?? w['workspacePath'] ?? '')
+}
 
 export const useAppStore = defineStore('app', {
   state: () => ({
@@ -110,6 +123,11 @@ export const useAppStore = defineStore('app', {
     loadingOlder: false,
     /** 发送失败的人话原因（errorValueText 解出的）。 */
     sendError: '',
+    /**
+     * 草稿会话（`chatMeta.sessionId === ''`）要用的模型配置。
+     * 首条消息时才 `createSession`，config 随建会话下发，再由闸门校验落位。
+     */
+    draftConfig: null as Record<string, unknown> | null,
 
     // —— 附件上传 ——
     /** 上传进度 0~1；null = 没有在传。 */
@@ -192,6 +210,11 @@ export const useAppStore = defineStore('app', {
       return state.chat != null && hasMoreOlder(state.chat) && !state.loadingOlder
     },
 
+    /** 草稿态：进了聊天页但还没有 sessionId，首条消息才建会话。 */
+    isDraft(state): boolean {
+      return state.chatMeta != null && !state.chatMeta.sessionId
+    },
+
     /**
      * 待回答的交互（询问 / 审批）。
      * **非空时服务端在等回答、回合不会继续**——不渲染面板会话就永久卡住。
@@ -262,7 +285,7 @@ export const useAppStore = defineStore('app', {
     async openWorkspace(w: Workspace): Promise<void> {
       const session = this.session
       if (!session) throw new Error('未连接')
-      const key = String(w['workspaceKey'] ?? w['workspacePath'] ?? '')
+      const key = workspaceKeyOf(w)
       if (!key) throw new Error('工作区缺少 key')
       this.closeSession()
       this.conv = null
@@ -413,10 +436,15 @@ export const useAppStore = defineStore('app', {
 
     // ────────────────────── 会话（聊天记录） ──────────────────────
 
-    /** 打开会话：订阅帧 → 快照 / 增量应用。 */
-    async openSession(sessionId: string, title?: string): Promise<void> {
+    /**
+     * 打开会话：订阅帧 → 快照 / 增量应用。
+     *
+     * resolve(true) = 首帧到了；resolve(false) = 12s 没等到（订阅可能没建立）。
+     * 草稿发送流程要在 `createSession` 之后 await 它，才能拿快照做模型闸门。
+     */
+    async openSession(sessionId: string, title?: string): Promise<boolean> {
       const conv = this.conv
-      if (!conv) return
+      if (!conv) return false
       this.chatLoading = true
       this.sendError = ''
       this.chat = createConvState()
@@ -428,6 +456,18 @@ export const useAppStore = defineStore('app', {
       // 订阅是异步的，快照到达前 rows 是空的，此时 ChatView 会显示
       // 「还没有消息，发一条开…」——把「还没到」谎报成「真的没有」。
       let firstFrameArrived = false
+      let resolveFirst: (v: boolean) => void = () => {}
+      const firstFrame = new Promise<boolean>((resolve) => {
+        resolveFirst = resolve
+      })
+      let settled = false
+      const finish = (v: boolean): void => {
+        if (settled) return
+        settled = true
+        if (chatFirstFrameSettle === finish) chatFirstFrameSettle = null
+        resolveFirst(v)
+      }
+      chatFirstFrameSettle = finish
       const clearLoadTimer = () => {
         if (chatLoadTimer) {
           clearTimeout(chatLoadTimer)
@@ -440,6 +480,7 @@ export const useAppStore = defineStore('app', {
         if (this.chat !== state || firstFrameArrived) return
         this.chatLoading = false
         this.log('[conv] 首帧超时（12s）——订阅可能没建立')
+        finish(false)
       }, 12_000)
 
       const applyFrame = (frame: Record<string, unknown>) => {
@@ -451,6 +492,7 @@ export const useAppStore = defineStore('app', {
           firstFrameArrived = true
           this.chatLoading = false
           clearLoadTimer()
+          finish(true)
         }
         const p = payload as Record<string, unknown>
 
@@ -477,6 +519,31 @@ export const useAppStore = defineStore('app', {
         seq: state.seq,
         logEpoch: state.logEpoch,
       }))
+      return firstFrame
+    },
+
+    /**
+     * 进草稿聊天页：此时**还没有** sessionId。
+     *
+     * 建会话的时机照抄 Flutter（`chat_page.dart:746`）——**首条消息**才
+     * `createSession`，且**不**把首条消息塞进 `firstInput`：模型被服务端回退时
+     * 消息已经进了错模型，重试还会重复发。空会话 + 闸门 + sendText 才是安全顺序。
+     */
+    openDraft(): void {
+      const conv = this.conv
+      if (!conv) return
+      this.closeSession()
+      this.chat = createConvState()
+      this.chatMeta = { sessionId: '', title: '新会话' }
+      this.draftConfig = null
+      this.chatLoading = false
+      this.sendError = ''
+      this.loadingOlder = false
+    },
+
+    /** 草稿要用的模型配置（接上模型弹层后由它填；null = 用工作区默认）。 */
+    setDraftConfig(config: Record<string, unknown> | null): void {
+      this.draftConfig = config
     },
 
     closeSession(): void {
@@ -486,6 +553,10 @@ export const useAppStore = defineStore('app', {
         clearTimeout(chatLoadTimer)
         chatLoadTimer = null
       }
+      // 结掉在途的 openSession 等待，否则草稿发送流程会挂在拿不到的首帧上。
+      const settle = chatFirstFrameSettle
+      chatFirstFrameSettle = null
+      settle?.(false)
       this.chat = null
       this.chatMeta = null
       this.sendError = ''
@@ -526,12 +597,34 @@ export const useAppStore = defineStore('app', {
     /** 发送文本（带已上传的附件）。失败时把服务端给的具体原因解出来。 */
     async sendText(text: string): Promise<void> {
       const conv = this.conv
-      const sid = this.chatMeta?.sessionId
-      if (!conv || !sid) return
+      if (!conv) return
       const attachments = this.pendingAttachments
       if (!text.trim() && attachments.length === 0) return
       this.sendError = ''
+      let sid = this.chatMeta?.sessionId ?? ''
       try {
+        // 草稿：先建**空**会话 → 订阅拿快照 → 模型闸门放行 → 才发首条。
+        // 顺序反了（把首条塞进 firstInput）就没有闸门位置：模型被服务端回退时
+        // 消息已经进了错模型，用户重试还会重复发（见 docs/feat-draft-model-ready-gate.md）。
+        if (this.isDraft) {
+          const key = workspaceKeyOf(this.workspace)
+          if (!key) throw new Error('还没选工作区，开不了新会话')
+          const created = await conv.createSession(key, {
+            config: this.draftConfig ?? undefined,
+          })
+          const gotFrame = await this.openSession(created, this.chatMeta?.title || '新会话')
+          if (!gotFrame) this.log('[conv] 新会话首帧未到，仍继续发送（闸门跳过）')
+          const gate = checkModelGate(this.chat?.snapshot ?? null, this.draftConfig)
+          if (!gate.ok) {
+            this.sendError = gate.reason
+            throw new Error(gate.reason)
+          }
+          this.draftConfig = null
+          // 新会话本机及时可见：索引流不再复活幽灵卡，卡片由服务端列表承担
+          // （Flutter 09-13 多端一致性批次的裁定），建完立刻拉一次。
+          void this.loadSessions()
+          sid = created
+        }
         await conv.sendText(sid, text, {
           attachments: attachments.length
             ? attachments.map((a) => ({

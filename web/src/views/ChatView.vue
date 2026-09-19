@@ -330,7 +330,12 @@ function isExpanded(r: ConvRow, i: number): boolean {
         <div v-else-if="rows.length > 0" class="list-start">— 会话开头 —</div>
 
         <div v-if="rows.length === 0" class="empty">
-          {{ app.chatLoading ? '正在加载聊天记录…' : '还没有消息，发一条开始吧' }}
+          <template v-if="app.isDraft">
+            {{ app.sendError || '新会话：发出第一条消息时才会真正创建' }}
+          </template>
+          <template v-else>{{
+            app.chatLoading ? '正在加载聊天记录…' : '还没有消息，发一条开始吧'
+          }}</template>
         </div>
 
         <template v-for="(r, i) in rows" :key="rowKey(r, i)">

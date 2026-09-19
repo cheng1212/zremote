@@ -112,6 +112,14 @@ onMounted(() => {
           aria-label="搜索会话"
           @input="app.setSessionsQuery(($event.target as HTMLInputElement).value)"
         />
+        <button
+          class="refresh"
+          type="button"
+          :disabled="!app.conv"
+          @click="app.openDraft()"
+        >
+          ＋ 新会话
+        </button>
         <button class="refresh" type="button" :disabled="app.sessionsLoading" @click="onRefresh">
           {{ app.sessionsLoading ? '…' : '刷新' }}
         </button>
@@ -129,7 +137,7 @@ onMounted(() => {
         <div v-else-if="app.sessionsTotal === 0" class="hint">
           <div class="card tip">
             <strong>这个项目还没有会话</strong>
-            <p>去桌面端或手机端开一个会话，这里会自动出现。</p>
+            <p>点上方「＋ 新会话」直接开一个，或去桌面端建。</p>
           </div>
         </div>
 

@@ -98,11 +98,11 @@ export const EV_INDEX_FRAME = 'onDynamicSessionsIndexFrame'
 export const M_ROWS_RANGE = 'conversationRowsRangeV4'
 export const M_PLANS = 'conversationPlansV4'
 export const M_FILE_CHANGES = 'conversationFileChangesV4'
+export const M_FILE_REWIND_PREVIEW = 'conversationFileRewindPreviewV4'
 export const M_ATTACHMENT_BEGIN = 'attachmentBeginV4'
 export const M_ATTACHMENT_CHUNK = 'attachmentChunkV4'
 export const M_ATTACHMENT_COMMIT = 'attachmentCommitV4'
 export const M_ATTACHMENT_READ = 'attachmentReadV4'
-export const M_PREPARE_WORKSPACE = 'prepareWorkspace'
 
 /** 需要 baseRevision（乐观并发）的命令。 */
 export const CAS_COMMANDS = new Set([

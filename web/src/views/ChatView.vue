@@ -27,6 +27,7 @@ import { MAX_FILES_PER_PICK, formatBytes } from '../lib/upload'
 import { rowAttachments, type AttItem } from '../lib/attachments'
 import AskPanel from '../components/AskPanel.vue'
 import AttachmentBlock from '../components/AttachmentBlock.vue'
+import ConfigSheet from '../components/ConfigSheet.vue'
 import type { ConvRow } from '../lib/convRows'
 
 const app = useAppStore()
@@ -34,6 +35,14 @@ const app = useAppStore()
 const input = ref('')
 const sending = ref(false)
 const listRef = ref<HTMLElement | null>(null)
+/** 模型/模式面板。 */
+const showConfig = ref(false)
+
+function openConfig(): void {
+  showConfig.value = true
+  // 面板先开再拉：选项要 2 秒上下，阻塞式等待会让点击没反馈。
+  void app.loadConfigOptions()
+}
 
 // ── 附件入口：三个 input 分别调起相册 / 相机 / 文件 ──
 // 移动端浏览器靠 `accept` + `capture` 分派；桌面端三者都落到文件选择器。
@@ -306,6 +315,9 @@ function isExpanded(r: ConvRow, i: number): boolean {
       <button class="back" type="button" aria-label="返回列表" @click="back">‹</button>
       <strong class="title">{{ title }}</strong>
       <span v-if="phase" class="chip" :class="phase">{{ phase }}</span>
+      <button class="model-btn" type="button" @click="openConfig">
+        {{ app.modelTag || '模型' }}
+      </button>
     </header>
 
     <main
@@ -519,6 +531,8 @@ function isExpanded(r: ConvRow, i: number): boolean {
         @change="onFiles"
       />
     </footer>
+
+    <ConfigSheet v-if="showConfig" @close="showConfig = false" />
   </div>
 </template>
 
@@ -560,6 +574,24 @@ function isExpanded(r: ConvRow, i: number): boolean {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* 顶栏模型入口：拿不到选项时显示「模型」，宽度靠 max-width 兜住长模型名。 */
+.model-btn {
+  flex: none;
+  max-width: 40%;
+  min-height: 44px;
+  padding: 0 12px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1.6px solid var(--ink);
+  border-radius: 999px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
 }
 .list {
   flex: 1;

@@ -355,6 +355,33 @@ export class ConversationV4 {
     )
   }
 
+  /** 切模型（CAS）。`provider/model/thought` 三者必填，thought 缺失会被判参数错误。 */
+  switchModelConfig(
+    sessionId: string,
+    sel: { provider: string; model: string; thought: string },
+    ctx: { baseRevision: number | null; logEpoch: string | null },
+  ): Promise<unknown> {
+    return this.sendCommand(sessionId, 'switchModelConfig', { ...sel }, ctx)
+  }
+
+  /** 切协作模式（CAS）。取值 build / edit / plan / yolo。 */
+  switchCollaborationMode(
+    sessionId: string,
+    mode: string,
+    ctx: { baseRevision: number | null; logEpoch: string | null },
+  ): Promise<unknown> {
+    return this.sendCommand(sessionId, 'switchCollaborationMode', { mode }, ctx)
+  }
+
+  /** 排队 vs 引导（CAS）。取值 queue / guide。 */
+  setFollowupMode(
+    sessionId: string,
+    mode: string,
+    ctx: { baseRevision: number | null; logEpoch: string | null },
+  ): Promise<unknown> {
+    return this.sendCommand(sessionId, 'setFollowupMode', { mode }, ctx)
+  }
+
   async sendText(
     sessionId: string,
     text: string,

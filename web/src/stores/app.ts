@@ -40,6 +40,12 @@ import {
 } from '../lib/ask'
 import { checkModelGate } from '../lib/modelGate'
 import {
+  buildModelSelection,
+  modelLabel,
+  parseConfigGroups,
+  type ConfigGroup,
+} from '../lib/configOptions'
+import {
   MAX_FILE_BYTES,
   exceedsLimit,
   formatBytes,
@@ -137,6 +143,14 @@ export const useAppStore = defineStore('app', {
      */
     draftConfig: null as Record<string, unknown> | null,
 
+    // —— 模型 / 模式选项（`getTaskConfigOptions`）——
+    /** 选项组缓存。⚠️ 是**会话域**的：`getTaskConfigOptions` 要 taskId。 */
+    configGroups: [] as ConfigGroup[],
+    /** 这批选项属于哪个会话——不记就会把上一个会话的模型列表串到下一个。 */
+    configTaskId: '',
+    configLoading: false,
+    configError: '',
+
     // —— 附件上传 ——
     /** 上传进度 0~1；null = 没有在传。 */
     uploadPct: null as number | null,
@@ -212,6 +226,11 @@ export const useAppStore = defineStore('app', {
     /** 真在产出——决定「停止」按钮出不出现（排队中给停止是错的）。 */
     running(): boolean {
       return isProducingPhase(this.phase)
+    },
+
+    /** 顶栏当前模型短名。拿不到选项组就是空串，UI 自己降级显示。 */
+    modelTag(state): string {
+      return modelLabel(state.configGroups)
     },
 
     /** 会话级出错（服务端不建助手行时，时间线什么都不渲染——要自己提示）。 */
@@ -632,6 +651,9 @@ export const useAppStore = defineStore('app', {
           this.chatLoading = false
           clearLoadTimer()
           finish(true)
+          // 模型/模式选项要 1.7~3.3s，且只认 taskId —— 首帧到了再后台拉，
+          // 既不阻塞进会话，也保证拉的时候 sessionId 是有效的。
+          void this.loadConfigOptions()
         }
         const p = payload as Record<string, unknown>
 
@@ -729,6 +751,100 @@ export const useAppStore = defineStore('app', {
     forceResync(): void {
       const sid = this.chatMeta?.sessionId
       if (sid) this.conv?.resync(sid)
+    },
+
+    /** CAS 上下文：`revision` 与 `logEpoch` 都取当前快照，缺了由协议层本地闸拦下。 */
+    casCtx(): { baseRevision: number | null; logEpoch: string | null } {
+      const snap = this.chat?.snapshot
+      const rev = snap && typeof snap['revision'] === 'number' ? (snap['revision'] as number) : null
+      return { baseRevision: rev, logEpoch: this.chat?.logEpoch ?? null }
+    },
+
+    /**
+     * 拉模型 / 思考等级 / 模式选项。
+     *
+     * 三条实测约束（都来自 Flutter 端 `app_controller.loadPrep`）：
+     * · 接口只认 **taskId**，草稿没有 taskId ⇒ 草稿沿用上一次缓存的选项组，不重拉；
+     * · 老方法 `prepareWorkspace` 已被桌面端升级**删除**（调它 Method not found），
+     *   所以这里**不留回退路径**——回退只会在用户面前多失败一次；
+     * · 这一步本身要 1.7~3.3s，是最该给用户"加载中"反馈的一个。
+     */
+    async loadConfigOptions(force = false): Promise<void> {
+      const conv = this.conv
+      const task = this.task
+      const sid = this.chatMeta?.sessionId ?? ''
+      if (!conv || !task) {
+        this.configError = '桥未就绪（未连接桌面端），稍后重试'
+        return
+      }
+      if (!sid) return
+      if (!force && this.configTaskId === sid && this.configGroups.length > 0) return
+      this.configLoading = true
+      this.configError = ''
+      try {
+        const groups = parseConfigGroups(await task.getTaskConfigOptions(sid))
+        this.configGroups = groups
+        this.configTaskId = sid
+        if (groups.length === 0) {
+          this.configError = '桌面端没返回可选项'
+          this.log('[cfg] getTaskConfigOptions 空选项组')
+        }
+      } catch (e) {
+        // 不清空已有缓存：拿不到新选项时，让用户至少还能看到上一次的结果。
+        this.configError = errorValueText(e) ?? String(e)
+        this.log(`[cfg] getTaskConfigOptions 失败: ${this.configError}`)
+      } finally {
+        this.configLoading = false
+      }
+    },
+
+    /** 切模型。草稿态没有会话可切 ⇒ 记成 `draftConfig`，首条消息随建会话下发。 */
+    async applyModel(modelValue: string): Promise<boolean> {
+      const conv = this.conv
+      const sel = buildModelSelection(this.configGroups, modelValue)
+      if (!conv || !sel) return false
+      if (this.isDraft) {
+        this.draftConfig = { ...sel }
+        this.configError = ''
+        return true
+      }
+      const sid = this.chatMeta?.sessionId ?? ''
+      if (!sid) return false
+      this.configError = ''
+      try {
+        await conv.switchModelConfig(sid, sel, this.casCtx())
+        // 以服务端为准：切完重取快照 + 重拉选项，界面显示的永远是落位后的值。
+        this.forceResync()
+        await this.loadConfigOptions(true)
+        return true
+      } catch (e) {
+        this.configError = errorValueText(e) ?? String(e)
+        this.log(`[cfg] 切模型失败: ${this.configError}`)
+        return false
+      }
+    },
+
+    /** 切协作模式（build / edit / plan / yolo）。草稿态同 applyModel：记进 draftConfig。 */
+    async applyMode(mode: string): Promise<boolean> {
+      const conv = this.conv
+      if (!conv) return false
+      if (this.isDraft) {
+        this.draftConfig = { ...(this.draftConfig ?? {}), mode }
+        return true
+      }
+      const sid = this.chatMeta?.sessionId ?? ''
+      if (!sid) return false
+      this.configError = ''
+      try {
+        await conv.switchCollaborationMode(sid, mode, this.casCtx())
+        this.forceResync()
+        await this.loadConfigOptions(true)
+        return true
+      } catch (e) {
+        this.configError = errorValueText(e) ?? String(e)
+        this.log(`[cfg] 切模式失败: ${this.configError}`)
+        return false
+      }
     },
 
     // ────────────────────── 发送 / 停止 ──────────────────────

@@ -46,6 +46,13 @@ import {
   type ConfigGroup,
 } from '../lib/configOptions'
 import {
+  parseFileChanges,
+  parseRewindPreview,
+  rewindTargetOf,
+  type FileChangeRow,
+  type RewindPreview,
+} from '../lib/fileChanges'
+import {
   MAX_FILE_BYTES,
   exceedsLimit,
   formatBytes,
@@ -150,6 +157,16 @@ export const useAppStore = defineStore('app', {
     configTaskId: '',
     configLoading: false,
     configError: '',
+
+    // —— 本回合文件变更 / 回滚 ——
+    changes: [] as FileChangeRow[],
+    changesLoading: false,
+    changesError: '',
+    /** 回滚预览（服务端算好的 canApply 与安全/不安全文件计数）。 */
+    rewindPreview: null as RewindPreview | null,
+    /** 待回滚的回合目标（预览与执行必须同一个，否则可能滚到别的回合）。 */
+    rewindTarget: null as { rowId: number; entityId: string } | null,
+    rewinding: false,
 
     // —— 附件上传 ——
     /** 上传进度 0~1；null = 没有在传。 */
@@ -723,6 +740,9 @@ export const useAppStore = defineStore('app', {
       this.sendError = ''
       this.loadingOlder = false
       this.clearAttachmentState()
+      // 文件变更清单与回滚预览都是**会话级**的：留着会把上个会话的清单
+      // 显示在新会话里，更危险的是 rewindTarget 还指着上个回合的行。
+      this.clearChanges()
     },
 
     /** 上滑翻页：拉更早 60 条，去重前置合并。 */
@@ -844,6 +864,89 @@ export const useAppStore = defineStore('app', {
         this.configError = errorValueText(e) ?? String(e)
         this.log(`[cfg] 切模式失败: ${this.configError}`)
         return false
+      }
+    },
+
+    // ────────────────────── 文件变更 / 回滚 ──────────────────────
+
+    clearChanges(): void {
+      this.changes = []
+      this.changesError = ''
+      this.changesLoading = false
+      this.rewindPreview = null
+      this.rewindTarget = null
+      this.rewinding = false
+    },
+
+    /** 本回合文件变更清单（`conversationFileChangesV4`）。 */
+    async loadChanges(): Promise<void> {
+      const conv = this.conv
+      const sid = this.chatMeta?.sessionId ?? ''
+      if (!conv || !sid) {
+        this.changesError = this.isDraft ? '新会话还没有文件变更' : '桥未就绪'
+        return
+      }
+      this.changesLoading = true
+      this.changesError = ''
+      try {
+        const ctx = this.casCtx()
+        const parsed = parseFileChanges(await conv.fileChanges(sid, ctx))
+        this.changes = parsed.items
+        if (parsed.items.length === 0) this.changesError = '最近回合没有文件变更'
+      } catch (e) {
+        this.changesError = errorValueText(e) ?? String(e)
+        this.log(`[file] fileChanges 失败: ${this.changesError}`)
+      } finally {
+        this.changesLoading = false
+      }
+    },
+
+    /**
+     * 回滚前必须先预览：`canApply` 与安全/不安全计数是**服务端算的**
+     * （它会判断哪些文件被用户自己改过）。客户端不数一遍就滚 = 覆盖用户改动。
+     */
+    async previewRewind(row: Record<string, unknown>): Promise<void> {
+      const conv = this.conv
+      const sid = this.chatMeta?.sessionId ?? ''
+      const target = rewindTargetOf(row)
+      if (!conv || !sid) return
+      if (!target) {
+        this.changesError = '这一回合服务端没给 entityId，滚不回（需要桌面端同一版本的数据）'
+        return
+      }
+      this.changesError = ''
+      try {
+        this.rewindPreview = parseRewindPreview(
+          await conv.fileRewindPreview(sid, target, this.casCtx()),
+        )
+        this.rewindTarget = target
+      } catch (e) {
+        this.changesError = errorValueText(e) ?? String(e)
+        this.log(`[file] rewindPreview 失败: ${this.changesError}`)
+      }
+    },
+
+    /** 执行回滚（CAS 行级命令）。调用方必须已经拿到 preview 且 `canApply`。 */
+    async applyRewind(): Promise<boolean> {
+      const conv = this.conv
+      const sid = this.chatMeta?.sessionId ?? ''
+      const target = this.rewindTarget
+      if (!conv || !sid || !target || !this.rewindPreview?.canApply) return false
+      this.rewinding = true
+      this.changesError = ''
+      try {
+        await conv.sendCommand(sid, 'applyFileRewind', { target }, this.casCtx())
+        this.forceResync()
+        await this.loadChanges()
+        this.rewindPreview = null
+        this.rewindTarget = null
+        return true
+      } catch (e) {
+        this.changesError = errorValueText(e) ?? String(e)
+        this.log(`[file] applyFileRewind 失败: ${this.changesError}`)
+        return false
+      } finally {
+        this.rewinding = false
       }
     },
 

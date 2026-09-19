@@ -28,6 +28,8 @@ import { rowAttachments, type AttItem } from '../lib/attachments'
 import AskPanel from '../components/AskPanel.vue'
 import AttachmentBlock from '../components/AttachmentBlock.vue'
 import ConfigSheet from '../components/ConfigSheet.vue'
+import FileChangesSheet from '../components/FileChangesSheet.vue'
+import { rowFileChangeBadge } from '../lib/fileChanges'
 import type { ConvRow } from '../lib/convRows'
 
 const app = useAppStore()
@@ -42,6 +44,20 @@ function openConfig(): void {
   showConfig.value = true
   // 面板先开再拉：选项要 2 秒上下，阻塞式等待会让点击没反馈。
   void app.loadConfigOptions()
+}
+
+/** 文件变更面板：打开的是哪一回合（回滚目标是行级的）。 */
+const showChanges = ref(false)
+const changesRow = ref<Record<string, unknown> | null>(null)
+
+function badgeOf(r: ConvRow): string {
+  return rowFileChangeBadge(r)
+}
+
+function openChanges(r: ConvRow): void {
+  changesRow.value = r
+  showChanges.value = true
+  void app.loadChanges()
 }
 
 // ── 附件入口：三个 input 分别调起相册 / 相机 / 文件 ──
@@ -410,6 +426,15 @@ function isExpanded(r: ConvRow, i: number): boolean {
           <!-- 轮次头 / 时间线标记：细分隔 -->
           <div v-else-if="kindOf(r) === 'turnHeader' || kindOf(r) === 'timelineMarker'" class="line">
             <div class="marker">{{ textOf(r) || String(r['label'] ?? '') }}</div>
+            <!-- 回合自带的文件摘要：点进去看清单，并从这里发起回滚（两步：预览→确认） -->
+            <button
+              v-if="badgeOf(r)"
+              class="file-badge"
+              type="button"
+              @click="openChanges(r)"
+            >
+              {{ badgeOf(r) }}
+            </button>
           </div>
 
           <!-- 未知行类型：显式占位，不静默吞掉（否则用户以为丢了消息） -->
@@ -533,6 +558,11 @@ function isExpanded(r: ConvRow, i: number): boolean {
     </footer>
 
     <ConfigSheet v-if="showConfig" @close="showConfig = false" />
+    <FileChangesSheet
+      v-if="showChanges && changesRow"
+      :row="changesRow"
+      @close="showChanges = false"
+    />
   </div>
 </template>
 
@@ -591,6 +621,20 @@ function isExpanded(r: ConvRow, i: number): boolean {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  cursor: pointer;
+}
+/* 回合行上的文件摘要入口 */
+.file-badge {
+  flex: none;
+  min-height: 36px;
+  padding: 0 10px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink-soft);
+  background: none;
+  border: 1.2px solid var(--line);
+  border-radius: 999px;
   cursor: pointer;
 }
 .list {

@@ -314,7 +314,7 @@ export class ConversationV4 {
   /** 本回合文件变更清单。 */
   async fileChanges(
     sessionId: string,
-    base?: { revision: number | null; logEpoch: string | null },
+    base?: { baseRevision: number | null; logEpoch: string | null },
   ): Promise<unknown> {
     await this.handshake()
     return this.ch.call(
@@ -324,7 +324,7 @@ export class ConversationV4 {
         {
           ...this.bridge.scope,
           sessionId,
-          ...(typeof base?.revision === 'number' ? { baseRevision: base.revision } : {}),
+          ...(typeof base?.baseRevision === 'number' ? { baseRevision: base.baseRevision } : {}),
           ...(base?.logEpoch ? { baseLogEpoch: base.logEpoch } : {}),
         },
       ],
@@ -336,7 +336,7 @@ export class ConversationV4 {
   async fileRewindPreview(
     sessionId: string,
     target: { rowId: number; entityId?: string },
-    base: { revision: number | null; logEpoch: string | null },
+    base: { baseRevision: number | null; logEpoch: string | null },
   ): Promise<unknown> {
     await this.handshake()
     return this.ch.call(
@@ -347,7 +347,7 @@ export class ConversationV4 {
           ...this.bridge.scope,
           sessionId,
           target,
-          ...(typeof base.revision === 'number' ? { baseRevision: base.revision } : {}),
+          ...(typeof base.baseRevision === 'number' ? { baseRevision: base.baseRevision } : {}),
           ...(base.logEpoch ? { baseLogEpoch: base.logEpoch } : {}),
         },
       ],

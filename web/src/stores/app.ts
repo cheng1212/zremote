@@ -71,6 +71,10 @@ export interface ChatMeta {
  */
 let chatSub: Subscription | null = null
 let indexSub: Subscription | null = null
+/** 首帧兜底计时器：订阅失败时不能让「正在加载」永远挂着。 */
+let chatLoadTimer: ReturnType<typeof setTimeout> | null = null
+/** 在途上传的取消旗标（模块级资源，不进 state、也不进 actions）。 */
+let uploadCancel: (() => void) | null = null
 
 export const useAppStore = defineStore('app', {
   state: () => ({
@@ -420,11 +424,34 @@ export const useAppStore = defineStore('app', {
       const state = this.chat
       this.loadingOlder = false
 
+      // chatLoading 必须真的覆盖到**第一帧**，不能在函数末尾顺手置 false：
+      // 订阅是异步的，快照到达前 rows 是空的，此时 ChatView 会显示
+      // 「还没有消息，发一条开…」——把「还没到」谎报成「真的没有」。
+      let firstFrameArrived = false
+      const clearLoadTimer = () => {
+        if (chatLoadTimer) {
+          clearTimeout(chatLoadTimer)
+          chatLoadTimer = null
+        }
+      }
+      clearLoadTimer()
+      chatLoadTimer = setTimeout(() => {
+        chatLoadTimer = null
+        if (this.chat !== state || firstFrameArrived) return
+        this.chatLoading = false
+        this.log('[conv] 首帧超时（12s）——订阅可能没建立')
+      }, 12_000)
+
       const applyFrame = (frame: Record<string, unknown>) => {
         // 会话已切换：迟到的帧直接丢（否则会把旧会话的行灌进新会话）。
         if (this.chat !== state) return
         const payload = frame['payload']
         if (!payload || typeof payload !== 'object') return
+        if (!firstFrameArrived) {
+          firstFrameArrived = true
+          this.chatLoading = false
+          clearLoadTimer()
+        }
         const p = payload as Record<string, unknown>
 
         if (p['kind'] === 'snapshot') {
@@ -450,12 +477,15 @@ export const useAppStore = defineStore('app', {
         seq: state.seq,
         logEpoch: state.logEpoch,
       }))
-      this.chatLoading = false
     },
 
     closeSession(): void {
       chatSub?.cancel()
       chatSub = null
+      if (chatLoadTimer) {
+        clearTimeout(chatLoadTimer)
+        chatLoadTimer = null
+      }
       this.chat = null
       this.chatMeta = null
       this.sendError = ''
@@ -606,7 +636,7 @@ export const useAppStore = defineStore('app', {
       this.uploadName = file.name
       this.uploadPct = 0
       let cancelled = false
-      this._cancelUpload = () => {
+      uploadCancel = () => {
         cancelled = true
       }
       try {
@@ -631,13 +661,13 @@ export const useAppStore = defineStore('app', {
       } finally {
         this.uploadPct = null
         this.uploadName = ''
-        this._cancelUpload = null
+        uploadCancel = null
       }
     },
 
     /** 取消在途上传（分片边界生效——每片一个网络往返，边界是唯一的取消窗口）。 */
     cancelUpload(): void {
-      this._cancelUpload?.()
+      uploadCancel?.()
     },
 
     removeAttachment(ref: string): void {
@@ -647,9 +677,6 @@ export const useAppStore = defineStore('app', {
     clearAttachments(): void {
       this.pendingAttachments = []
     },
-
-    /** 上传取消旗标（模块级资源，不进 state）。 */
-    _cancelUpload: null as (() => void) | null,
 
     // ────────────── 附件读取（浏览器不能读本地路径，只能走协议） ──────────────
 
@@ -710,6 +737,11 @@ export const useAppStore = defineStore('app', {
 
     disconnect(): void {
       this.closeSession()
+      // 指数订阅也要显式拆掉：Subscription 构造时起了 30s 的分片清理
+      // setInterval，只有 cancel() 会清它。只 dispose 桥不取消订阅，
+      // 每断开重连一次就留下一个永不销毁的定时器 + 一张分片表。
+      indexSub?.cancel()
+      indexSub = null
       this.session?.dispose()
       this.session = null
       this.bridge = null

@@ -59,7 +59,9 @@
 | `subscribeSessionsIndexV4({scope, runtimePolicy:"existing-only"})` | `onDynamicSessionsIndexFrame` | `sessions-index/<workspaceIdentity\|\|workspacePath>` |
 | `unsubscribeSessionsIndexV4` / `resyncSessionsIndexV4` | | |
 
-帧结构：`{wireVersion:3, kind:"complete"|"fragment", topic, subscriptionId, frame|logicalFrameId+fragmentIndex+fragmentCount+dataBase64}`；frame.payload = `{kind:"snapshot", snapshot}` 或 `{kind:"deltas", deltas, fromSeq, toSeq}`。
+帧结构：`{wireVersion:3, kind:"complete"|"fragment", topic, subscriptionId, frame|logicalFrameId+fragmentIndex+fragmentCount+dataBase64}`；frame.payload = `{kind:"snapshot", snapshot}` 或 `{kind:"deltas", deltas}`。
+
+⚠️ **`fromSeq` / `toSeq` 在 frame 层，不在 payload 里**（2026-09-19 依代码修正本行；此前此处把两个字段写进了 `payload`，两端实现 `conversation.dart:1208/1248` 与 `lib/convRows.ts:221` 读的都是 `frame['fromSeq']`）。按 payload 层读会拿到 `undefined` → 走 `?? seq` 兜底 → **seq 永不推进、真断档检测失效**（列表静默停在旧数据，正是"里跑外闲"那一类症状）。
 
 **命令** `sendConversationCommandV4({scope, envelope})`，envelope=`{commandId, clientId, sessionId, type, payload, issuedAt, baseRevision?(CAS), baseLogEpoch?(行级)}`：
 

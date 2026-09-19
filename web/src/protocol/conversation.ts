@@ -145,8 +145,14 @@ export class ConversationV4 {
       getBase: getBase ?? (() => ({ seq: 0, logEpoch: null })),
       onLog: this.onLog,
     })
-    const old = this.convSubs.get(sessionId)
-    if (old) old.cancel()
+    // 同时只显示一个会话：开新订阅前必须把**所有**在途的会话订阅拆掉。
+    // 原先只取消「同一个 sessionId 的旧订阅」，于是每换一个新会话就留下一个
+    // Subscription——它构造时起了 30s 的分片清理 setInterval，没人 cancel
+    // 就永不回收（连带 IPC handler 与分片表）。翻十几个会话就是十几个僵尸定时器。
+    for (const old of this.convSubs.values()) {
+      if (old !== sub) old.cancel()
+    }
+    this.convSubs.clear()
     this.convSubs.set(sessionId, sub)
     void sub.start().catch((e) => this.onLog?.(`[v4] subscribe failed: ${e}`))
     return sub

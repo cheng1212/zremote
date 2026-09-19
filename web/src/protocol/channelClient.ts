@@ -25,6 +25,7 @@ type ResHandler = (type: number, data: unknown) => void
 export class ChannelClient {
   private lastRequestId = 0
   private readyResolve: (() => void) | null = null
+  private readyPromise: Promise<void> | null = null
   private readyReady = false
   private handlers = new Map<number, ResHandler>()
   private pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: unknown) => void }>()
@@ -35,12 +36,32 @@ export class ChannelClient {
     private onLog?: (line: string) => void,
   ) {}
 
-  /** 立刻可 await 的 ready promise（对齐 Dart 的 Completer）。 */
+  /**
+   * 立刻可 await 的 ready promise（对齐 Dart 的 Completer）。
+   *
+   * ⚠️ 必须**缓存同一个 promise**：早先每次 `ready` 都新建一个 Promise 并把
+   * `readyResolve` 覆盖掉，于是**只有最后一个 await 者**会被唤醒——
+   * 冷桥面上并发发起多路调用时（`loadSessions` 的 `listTasks` +
+   * `listPinnedTasks` 就是并发），先发起的那一路拿不到 initialize，
+   * 白等满 30s 超时才失败。
+   */
   get ready(): Promise<void> {
     if (this.readyReady) return Promise.resolve()
-    return new Promise((resolve) => {
-      this.readyResolve = resolve
-    })
+    if (!this.readyPromise) {
+      this.readyPromise = new Promise<void>((resolve) => {
+        this.readyResolve = resolve
+      })
+    }
+    return this.readyPromise
+  }
+
+  private markReady(): void {
+    if (this.readyReady) return
+    this.readyReady = true
+    const resolve = this.readyResolve
+    this.readyResolve = null
+    this.readyPromise = null
+    resolve?.()
   }
 
   handleMessage(body: Uint8Array): void {
@@ -51,10 +72,7 @@ export class ChannelClient {
       const type = header[0]
       if (type === IPC_RES_INITIALIZE) {
         this.onLog?.('[ipc] initialized')
-        if (!this.readyReady) {
-          this.readyReady = true
-          this.readyResolve?.()
-        }
+        this.markReady()
         return
       }
       if (header.length < 2 || typeof header[1] !== 'number') return
@@ -75,8 +93,6 @@ export class ChannelClient {
     if (this.disposed) throw new Error('channel disposed')
     await this.waitForReady()
     const id = this.lastRequestId++
-    const pending = this.pending.get.bind(this.pending)
-    void pending
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.handlers.delete(id)
@@ -124,12 +140,16 @@ export class ChannelClient {
 
   private waitForReady(): Promise<void> {
     if (this.readyReady) return Promise.resolve()
+    // 计时器必须在胜出后清掉：留着既会让失败的 race 分支在 30s 后再抛一次
+    // （未处理的 rejection），也会在浏览器里长期占住一个定时器句柄和闭包。
+    let timer: ReturnType<typeof setTimeout> | undefined
     return Promise.race([
       this.ready,
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('channel init timeout')), 30_000),
+      new Promise<never>(
+        (_, reject) =>
+          (timer = setTimeout(() => reject(new Error('channel init timeout')), 30_000)),
       ),
-    ])
+    ]).finally(() => clearTimeout(timer)) as Promise<void>
   }
 
   /** 订阅通道事件；返回取消函数。 */
@@ -146,7 +166,9 @@ export class ChannelClient {
       if (type === IPC_RES_EVENT_FIRE) onEvent(data)
     })
     void this.ready.then(() => {
-      if (cancelled) return
+      // ready 可能比 dispose 晚到：桥已拆时 sendBody 会抛，而这里是条
+      // 无人接管的浮动 promise，异常会变成页面上的 unhandled rejection。
+      if (cancelled || this.disposed) return
       sent = true
       this.onLog?.(`[ipc] listen ${channel}.${event} id=${id}`)
       this.send(IPC_REQ_EVENT_LISTEN, id, channel, event, arg)
@@ -154,7 +176,7 @@ export class ChannelClient {
     return () => {
       cancelled = true
       this.handlers.delete(id)
-      if (sent) this.send(IPC_REQ_EVENT_DISPOSE, id, channel, event, null)
+      if (sent && !this.disposed) this.send(IPC_REQ_EVENT_DISPOSE, id, channel, event, null)
     }
   }
 

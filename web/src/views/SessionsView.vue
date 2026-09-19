@@ -10,12 +10,33 @@ import { computed, onMounted, ref } from 'vue'
 import { useAppStore } from '../stores/app'
 import { phaseLabel } from '../lib/phase'
 import { timeLabel } from '../lib/sessions'
+import type { SessionCard } from '../lib/sessions'
 import type { Workspace } from '../protocol/remoteSession'
+import RowActions from '../components/RowActions.vue'
 
 const app = useAppStore()
 const showSwitcher = ref(false)
+/** 打开行操作面板的那张卡（null = 没开）。 */
+const menuFor = ref<SessionCard | null>(null)
 
 const title = computed(() => (app.workspace ? app.workspaceTitle : '选择项目'))
+
+/** 归档视图与主列表共用同一套渲染，只换数据源（不另开一套列表代码）。 */
+const listForView = computed<SessionCard[]>(() =>
+  app.showArchived ? app.archived : app.sessions,
+)
+
+/** 当前视图「首次加载中」：只在还没有任何可显示内容时报，避免闪一下空态。 */
+const loadingForView = computed(() =>
+  app.showArchived
+    ? app.archivedLoading && app.archivedCards.length === 0
+    : app.sessionsLoading && app.sessionsTotal === 0,
+)
+
+/** 当前视图的服务端总数（搜索前）——搜索无结果 ≠ 一条都没有。 */
+const totalCountForView = computed(() =>
+  app.showArchived ? app.archivedCards.length : app.sessionsTotal,
+)
 
 function workspaceName(w: Workspace): string {
   return String(
@@ -123,32 +144,60 @@ onMounted(() => {
         <button class="refresh" type="button" :disabled="app.sessionsLoading" @click="onRefresh">
           {{ app.sessionsLoading ? '…' : '刷新' }}
         </button>
+        <button
+          class="refresh"
+          type="button"
+          :class="{ on: app.showArchived }"
+          :disabled="app.archivedLoading"
+          @click="void app.toggleArchivedView()"
+        >
+          {{ app.showArchived ? '看进行中' : '看归档' }}
+        </button>
       </div>
 
       <div v-if="app.sessionsError" class="strip strip--error">{{ app.sessionsError }}</div>
+      <div
+        v-if="app.listNotice"
+        class="strip strip--error"
+        role="alert"
+        @click="app.clearListNotice()"
+      >
+        {{ app.listNotice }}（点此关闭）
+      </div>
 
       <main class="body">
-        <!-- 加载中（首次，还没有任何数据） -->
-        <div v-if="app.sessionsLoading && app.sessionsTotal === 0" class="hint">
-          <div class="card tip">正在加载会话…</div>
-        </div>
-
-        <!-- 真的一条都没有 -->
-        <div v-else-if="app.sessionsTotal === 0" class="hint">
+        <!-- 加载中（首次，还没有任何可显示内容） -->
+        <div v-if="loadingForView" class="hint">
           <div class="card tip">
-            <strong>这个项目还没有会话</strong>
-            <p>点上方「＋ 新会话」直接开一个，或去桌面端建。</p>
+            {{ app.showArchived ? '正在加载归档…' : '正在加载会话…' }}
           </div>
         </div>
 
-        <!-- 有会话但搜索无结果 -->
-        <div v-else-if="app.sessions.length === 0" class="hint">
+        <!-- 归档列表拉取失败：诚实说失败，别显示「没有归档」 -->
+        <div v-else-if="app.showArchived && app.archivedFailed" class="hint">
+          <div class="card tip">
+            <strong>归档列表没拉到</strong>
+            <p>桌面端可能没有这个方法或暂时出错。点「看归档」重试。</p>
+          </div>
+        </div>
+
+        <!-- 当前视图真的一条都没有 -->
+        <div v-else-if="listForView.length === 0 && totalCountForView === 0" class="hint">
+          <div class="card tip">
+            <strong>{{ app.showArchived ? '还没有归档过会话' : '这个项目还没有会话' }}</strong>
+            <p v-if="app.showArchived">列表里的会话点右侧 ⋯ 就能归档。</p>
+            <p v-else>点上方「＋ 新会话」直接开一个，或去桌面端建。</p>
+          </div>
+        </div>
+
+        <!-- 有数据但搜索无结果 -->
+        <div v-else-if="listForView.length === 0" class="hint">
           <div class="card tip">没有匹配「{{ app.sessionsQuery }}」的会话。</div>
         </div>
 
         <ul v-else class="list">
           <li
-            v-for="s in app.sessions"
+            v-for="s in listForView"
             :key="s.sessionId"
             class="card row"
             @click="openSession(s.sessionId, s.title)"
@@ -165,11 +214,26 @@ onMounted(() => {
               </div>
               <div v-if="s.preview" class="row-preview">{{ s.preview }}</div>
             </div>
+            <button
+              class="kebab"
+              type="button"
+              aria-label="会话操作"
+              @click.stop="menuFor = s"
+            >
+              ⋯
+            </button>
             <span class="row-arrow">›</span>
           </li>
         </ul>
       </main>
     </template>
+
+    <RowActions
+      v-if="menuFor"
+      :card="menuFor"
+      :archived="app.showArchived"
+      @close="menuFor = null"
+    />
   </div>
 </template>
 
@@ -384,5 +448,29 @@ onMounted(() => {
   flex: none;
   font-size: 20px;
   color: var(--ink-faint);
+}
+/* 行操作入口。44px 见方 + 负 margin 回收占位，保证拇指热区够大又不撑行高。 */
+.kebab {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  margin-right: -10px;
+  font: inherit;
+  font-size: 20px;
+  line-height: 1;
+  font-weight: 800;
+  color: var(--ink-soft);
+  background: none;
+  border: none;
+  border-radius: 12px;
+  cursor: pointer;
+}
+.kebab:active {
+  background: var(--surface);
+}
+/* 「看归档」按下去要有明显的选中态——两个视图共用一套渲染，用户得知道现在在看哪个。 */
+.refresh.on {
+  color: var(--surface);
+  background: var(--ink);
 }
 </style>

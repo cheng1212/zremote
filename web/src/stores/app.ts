@@ -115,6 +115,14 @@ export const useAppStore = defineStore('app', {
     sessionsStale: false,
     sessionsError: '',
     sessionsQuery: '',
+    /** 归档视图（`listArchivedTasks`）——独立于 taskCards，不并入主列表。 */
+    archivedCards: [] as SessionCard[],
+    showArchived: false,
+    archivedLoading: false,
+    archivedFailed: false,
+    /** 列表行操作（置顶/重命名/归档/删除）的失败提示，人话。 */
+    listNotice: '',
+    listBusy: false,
 
     // —— 当前会话 ——
     chat: null as ConvState | null,
@@ -172,6 +180,11 @@ export const useAppStore = defineStore('app', {
     /** 列表（合并 + 排序 + 搜索过滤后的最终展示序列）。 */
     sessions(): SessionCard[] {
       return filterCards(this.allSessions, this.sessionsQuery)
+    },
+
+    /** 归档列表（同一条搜索过滤规则，别让两个视图行为不一致）。 */
+    archived(): SessionCard[] {
+      return filterCards(sortCards(this.archivedCards), this.sessionsQuery)
     },
 
     /** 服务端原始总数（搜索前）。搜索无结果 ≠ 没有会话。 */
@@ -293,6 +306,11 @@ export const useAppStore = defineStore('app', {
       this.indexCards = {}
       this.indexSeq = 0
       this.taskCards = []
+      // 归档集合是**工作区域**的：换项目不清就会把上个项目的归档列表留在屏上。
+      this.archivedCards = []
+      this.archivedFailed = false
+      this.showArchived = false
+      this.listNotice = ''
       const bridge = await session.openBridge(key)
       this.bridge = bridge
       this.workspace = w
@@ -372,6 +390,127 @@ export const useAppStore = defineStore('app', {
     async refreshSessions(): Promise<void> {
       this.conv?.resyncIndex()
       await this.loadSessions()
+    },
+
+    /** 行操作后的重拉：主列表 + （已看过归档时）归档列表。 */
+    async reloadLists(): Promise<void> {
+      const jobs: Promise<unknown>[] = [this.loadSessions()]
+      if (this.showArchived || this.archivedCards.length > 0) jobs.push(this.loadArchived())
+      await Promise.allSettled(jobs)
+    },
+
+    clearListNotice(): void {
+      this.listNotice = ''
+    },
+
+    /**
+     * 加载归档列表。失败标 `archivedFailed`——不吞成空列表，
+     * 那在用户眼里等于「我一个都没归档过」，是会骗人的空态。
+     */
+    async loadArchived(): Promise<void> {
+      const task = this.task
+      if (!task) return
+      this.archivedLoading = true
+      try {
+        const res = await task.listArchivedTasks()
+        this.archivedFailed = false
+        // keepArchived：归档项每条都带 archived:true，按主列表的过滤器会被清空。
+        this.archivedCards = cardsFromTasks(res, new Set<string>(), { keepArchived: true })
+        this.log(`[task] listArchivedTasks → ${this.archivedCards.length} 条`)
+      } catch (e) {
+        this.archivedFailed = true
+        this.log(`[task] listArchivedTasks 失败: ${String(e)}`)
+      } finally {
+        this.archivedLoading = false
+      }
+    },
+
+    async toggleArchivedView(): Promise<void> {
+      this.showArchived = !this.showArchived
+      if (this.showArchived && this.archivedCards.length === 0 && !this.archivedLoading) {
+        await this.loadArchived()
+      }
+    },
+
+    /**
+     * 统一执行一次列表行操作：调用 → 失败落 `listNotice` → 成功由调用方重拉。
+     *
+     * 刻意**不做乐观更新**：Flutter 端为置顶维护了 `_pinOverrides` + 软失败回滚，
+     * 那是三类"两端不一致"bug 的源头；Web 端成功后重拉一次就是权威状态
+     * （用户 2026-09-13 裁定：所有会话操作都写通服务端，下次加载两端必一致）。
+     */
+    async runTaskOp(label: string, fn: () => Promise<unknown>): Promise<boolean> {
+      const task = this.task
+      if (!task) return false
+      this.listBusy = true
+      this.listNotice = ''
+      try {
+        await fn()
+        return true
+      } catch (e) {
+        this.listNotice = `${label}失败：${errorValueText(e) ?? String(e)}`
+        this.log(`[task] ${label} 失败: ${this.listNotice}`)
+        return false
+      } finally {
+        this.listBusy = false
+      }
+    },
+
+    async pinTask(sessionId: string, pinned: boolean): Promise<void> {
+      const task = this.task
+      if (!task) return
+      const verb = pinned ? '置顶' : '取消置顶'
+      if (await this.runTaskOp(verb, () => task.setTaskPinned(sessionId, pinned))) {
+        await this.reloadLists()
+      }
+    },
+
+    async renameTask(sessionId: string, title: string): Promise<void> {
+      const task = this.task
+      const next = title.trim()
+      if (!task || !next) return
+      if (await this.runTaskOp('重命名', () => task.renameTask(sessionId, next))) {
+        await this.reloadLists()
+      }
+    },
+
+    async archiveTask(sessionId: string): Promise<void> {
+      const task = this.task
+      if (!task) return
+      if (await this.runTaskOp('归档', () => task.archiveTask(sessionId))) {
+        // 归档正在看的会话：聊天页留着就是指向一条已经从列表消失的记录。
+        if (this.chatMeta?.sessionId === sessionId) this.closeSession()
+        await this.reloadLists()
+      }
+    },
+
+    async unarchiveTask(sessionId: string): Promise<void> {
+      const task = this.task
+      if (!task) return
+      if (await this.runTaskOp('取消归档', () => task.unarchiveTask(sessionId))) {
+        await this.reloadLists()
+      }
+    },
+
+    /**
+     * 删除会话。**先 best-effort stop**：运行中的会话直接删，agent 会继续跑完，
+     * 白烧 token（BUG-23，用户点名）。stop 失败不拦删除——删才是用户要的结果。
+     */
+    async removeTask(sessionId: string): Promise<void> {
+      const task = this.task
+      if (!task) return
+      const card = this.allSessions.find((c) => c.sessionId === sessionId)
+      if (card && isBusyPhase(card.phase)) {
+        try {
+          await this.conv?.stop(sessionId)
+        } catch (e) {
+          this.log(`[task] 删除前 stop 失败（继续删）: ${String(e)}`)
+        }
+      }
+      if (await this.runTaskOp('删除', () => task.deleteTask(sessionId))) {
+        if (this.chatMeta?.sessionId === sessionId) this.closeSession()
+        await this.reloadLists()
+      }
     },
 
     /** sessions-index 帧：快照全量替换，deltas 增量 upsert/remove（带断档检测）。 */
@@ -844,6 +983,10 @@ export const useAppStore = defineStore('app', {
       this.workspaces = []
       this.taskCards = []
       this.indexCards = {}
+      this.archivedCards = []
+      this.showArchived = false
+      this.archivedFailed = false
+      this.listNotice = ''
       this.relayState = 'idle'
     },
   },

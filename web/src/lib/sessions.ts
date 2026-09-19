@@ -48,8 +48,14 @@ function activityOf(o: Record<string, unknown>): number {
  * `listTasks` 结果 → 卡片。
  * 过滤 `archived` / `deleted`（服务端会把归档项也放在 listTasks 里）。
  * @param pinnedIds 来自 `listPinnedTasks`，是置顶状态的唯一权威。
+ * @param opts.keepArchived 归档视图专用：**不能**再过滤 archived，
+ *   否则归档列表里每一条都带 `archived:true`，过滤完就永远是空的。
  */
-export function cardsFromTasks(list: unknown, pinnedIds: Set<string>): SessionCard[] {
+export function cardsFromTasks(
+  list: unknown,
+  pinnedIds: Set<string>,
+  opts?: { keepArchived?: boolean },
+): SessionCard[] {
   if (!Array.isArray(list)) return []
   const out: SessionCard[] = []
   for (const t of list) {
@@ -57,7 +63,7 @@ export function cardsFromTasks(list: unknown, pinnedIds: Set<string>): SessionCa
     const o = t as Record<string, unknown>
     const id = str(o['taskId'] ?? o['sessionId'] ?? o['id'])
     if (!id) continue
-    if (o['archived'] === true || o['deleted'] === true) continue
+    if (!opts?.keepArchived && (o['archived'] === true || o['deleted'] === true)) continue
     out.push({
       sessionId: id,
       title: str(o['title']) || id.slice(0, 18),

@@ -78,10 +78,30 @@ D:\tools\zremote-new\
 ├── AGENTS.md                  # 本文件：状态层 + 配置单 + 新会话必读
 ├── docs\
 │   ├── API.md                 # 逆向出的协议文档（改协议层前必读）
+│   ├── PROTOCOL-SCAN-2026-09-19.md  # 桌面端 3.12.3 静态读码差集：命令表全集 31 条
+│   │                          #   （15 条只是 CAS 子集）、platform-request 直达服务层、
+│   │                          #   CAS 在分派层强制、未验证项清单
+│   ├── HANDOVER-Z.md          # ★ 班次交接手册（接手先读它，再读本文件）
+│   ├── WEB-FEATURE-MAP.md     # Web 功能地图：13 域 112 交互点 + 完成度
 │   ├── ROADMAP.md             # 接口排期计划（批次一~四；状态需对照代码核实）
 │   ├── feat-*.md / fix-*.md   # 各功能/修复的设计文档
 │   └── LESSONS.md             # 坑层：只追加的踩坑日志（动手前先检索）
-├── lib\
+├── web\                       # ★★ 主战场（Vue 3 + Pinia + Vite + TS，移动端优先）
+│   ├── src\protocol\          #   relayClient / channelClient / subscription（信封解包
+│   │                          #     +分片+断档 resync）/ rpcFrames / conversation
+│   │                          #     （V4 命令 + createSession + CAS 本地闸）/ task /
+│   │                          #     valueCodec / proof / linkParams / constants
+│   ├── src\stores\app.ts      #   编排与状态：连接、列表、会话、草稿、附件、模型、行操作
+│   ├── src\lib\               #   可单测纯逻辑：convRows / sessions / ask / gates /
+│   │                          #     fragments / phase / scroll / upload / crypto（非安全
+│   │                          #     上下文降级）/ blobCache / modelGate / configOptions /
+│   │                          #     fileChanges / attachments
+│   ├── src\views + src\components  # Pair / Sessions / Chat；AskPanel / RowActions /
+│   │                          #     ConfigSheet / FileChangesSheet / AttachmentBlock
+│   ├── tests\                 #   vitest 全量：**201 条**（最后验证 2026-09-19）
+│   └── 启动.bat               #   `npm run dev -- --host`，手机走局域网 IP
+├── lib\                       # ⚠️ Flutter 24,021 行：**冻结、不开发、严禁删**
+│   │                          #   ——Web 重写的唯一图纸（含踩坑后的正确解法）
 │   ├── main.dart              # 入口 ZRemoteApp；启动时初始化 NotificationService
 │   ├── protocol\              # 协议层：relay_client / channel_client / rpc_frames /
 │   │                          #   fragment_assembler / crc32 / proof / link_params /
@@ -103,7 +123,10 @@ D:\tools\zremote-new\
 └── android\app\build.gradle*  # applicationId / 签名配置（见环境备忘）
 ```
 
-- 关键库文件数：`lib/` 下 32 个 `.dart` 文件（最后验证：2026-09-11）。
+- 关键库文件数：`lib/` 下 32 个 `.dart` 文件（冻结，最后验证：2026-09-11）；
+  **`web/src/` 共 8,319 行**——协议层 12 文件、纯逻辑 14 文件、UI 9 个 `.vue`
+  （最后验证：2026-09-19）。Web 侧改动行为必须同步 `docs/WEB-FEATURE-MAP.md` 与
+  `docs/HANDOVER-Z.md`「一、当前主线状态」。
 - 服务端返回形状未实测的一律做多形态兜底解析（参考 `parseTaskTokenUsage` /
   `describeFileChange` 的写法）。
 

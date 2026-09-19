@@ -1137,3 +1137,99 @@
 - **验证**：122 测试全过（新增 119）；`vue-tsc` 0 错误；`vite build` 通过。
 - **待真机验证**：5 个复测点见 `HANDOVER-Z.md`「一、当前主线状态」。
 
+---
+
+## 2026-09-19 批（协议层取证 + 4 个功能面）
+
+> 本批取证方式：静态读桌面端 **3.12.3.7463** 的 `app.asar`（`out/host/index.js`、
+> `out/main/index.js`、`out/host/chunk-3CQYXRMM.js`、`out/host/chunk-ZH56ETHO.js`），
+> 差集落档在 `docs/PROTOCOL-SCAN-2026-09-19.md`。**一律没打活体请求**。
+
+### WEB-BUG-04 `ready` 多等待者丢唤醒 —— 冷桥并发拉列表必有一路白等 30 秒
+
+- **现象**：刚开桥时 `loadSessions()` 的两路并发调用里，总有一路要等到 30s 超时才失败，
+  表现为「首次进项目列表一直转圈 / 报同步中断」。
+- **取证**：`web/src/protocol/channelClient.ts` 原 `get ready()` 每次访问 `new Promise`
+  并把 `this.readyResolve` **覆盖**掉。
+- **根因**：一个 resolve 位只能救最后一个等待者；`app.ts:308` 的
+  `Promise.allSettled([listTasks, listPinnedTasks])` 恰好是两个等待者。
+  `initialize`(resType 200) 一到，只有最后注册的那个被唤醒。
+- **修复**：缓存同一个 promise（`readyPromise`）+ `markReady()` 一次性唤醒；
+  顺带清掉 `waitForReady` 那支不 `clearTimeout` 的 30s 计时器。
+- **验证**：`web/tests/channel-client.test.ts`（5 测，含"两路都拿到回执"+`getTimerCount()===0`）。
+- **教训**：**"缓存一个 promise"和"每次造一个 promise"在只有一个调用者时等价，
+  在并发下不等价**。握手/单例资源类的 getter 一定要问一句：两个调用者同时来会怎样？
+
+### WEB-BUG-05 Subscription 泄漏族 —— 换会话/断开都漏一个永不销毁的定时器
+
+- **现象**：手机翻十几个会话后越来越卡（切会话变慢、发热）。
+- **取证**：`subscription.ts` 构造函数里起了 `setInterval(…, 30_000)`（分片清理），
+  只有 `cancel()` 会 `clearInterval`；而 `conversation.ts` 的
+  `subscribeSession` 只取消**同 sessionId** 的旧订阅，`app.ts` 的 `disconnect()`
+  又从不 `cancel(indexSub)`。
+- **根因**：订阅是"资源句柄 + 定时器"，但回收只挂在"同一个 key 被重复订阅"这一条路径上；
+  换会话、断开、切工作区都不走这条路径。
+- **修复**：开新会话订阅前拆掉全部在途订阅（同时只显示一个会话）；`disconnect()`
+  显式 `indexSub?.cancel()`；`closeSession()` 顺带清 `chatLoadTimer` 与文件变更态。
+- **验证**：`typecheck` + 现有订阅测试全过；`channel-client.test.ts` 钉 `getTimerCount()===0`。
+- **教训**：**"我在构造时起的东西，谁负责关"要在起的那一刻定死**——凡 `setInterval` /
+  `addEventListener` / 远端订阅，同一个 PR 里就要写出对应的回收路径，别指望"总有人 cancel"。
+
+### WEB-BUG-06 首帧未到就报"还没有消息"——把"还没到"谎报成"真的没有"
+
+- **现象**：点进一个有几百条历史的会话，先闪出「还没有消息，发一条开始吧」。
+- **取证**：`app.ts openSession()` 在函数末尾无条件 `this.chatLoading = false`，
+  而 `subscribeSession` 是异步的（首帧要等 ack + 快照）。
+- **根因**：`chatLoading` 被当成"函数执行完了"，实际语义该是"第一帧到了"。
+- **修复**：`openSession` 改为 `resolve(首帧到/没到)`，只在首帧或 12s 兜底时落下 loading；
+  `closeSession` 会结掉在途等待，避免草稿发送流程挂在拿不到的帧上。
+- **验证**：草稿建会话路径依赖这个返回值跑模型闸门（`web/tests/create-session.test.ts` 9 测）。
+- **教训**：**空态文案是断言，不是装饰**。任何"没有 X"的界面都必须能回答
+  "我是真的查过没有，还是还没查到"。这条与本文件 BUG-18（状态一致要靠对账）同源。
+
+### WEB-BUG-07 桥拆掉后还在往 socket 发东西（两处）
+
+- **现象**：返回列表 / 断开时控制台偶发 `unhandled rejection`，release 包里看不到栈。
+- **取证**：① `addEventListener` 的 `ready.then(…)` 落地时不查 `disposed`，
+  取消函数也不查；② `uploadCancel` 这个旗标写在 Pinia 的 `actions` 对象里
+  （`_cancelUpload: null`），不在 state 也不在模块作用域。
+- **根因**：①浮动 promise 没有错误归宿；②把"模块级资源"塞进了只该放函数的容器。
+- **修复**：两处都加 `disposed` 判断；`uploadCancel` 挪到模块作用域，与同文件
+  `chatSub/indexSub` 的既有约定一致。
+- **验证**：`channel-client.test.ts` 的 "dispose 后取消事件监听不再触碰已死的 sendBody"。
+- **教训**：**异步回调里"资源还在不在"必须在真正动手的那一刻再判一次**，
+  注册时的判断在 `.then` 里已经过期了。
+
+### 本批新增功能（用户口令：全量优化，Git 线 `pre-optimize-20260919`）
+
+- **createSession / 草稿模式**（`4905f5f`）：首条消息才建**空**会话 → 订阅拿快照 →
+  `checkModelGate` 放行 → 才 `sendText`。**刻意不把首条塞进 `firstInput`**：
+  模型被服务端回退时消息已进错模型，用户重试还会重复发（契约见
+  `docs/feat-draft-model-ready-gate.md`）。`sessionId` 在信封里是 **null**、
+  超时给 **90s**（建会话可能冷启动运行时）、`status!=accepted` 一律算失败——
+  远端拒绝也回 RPC 成功，只看 promise 会把失败当成功。
+- **模型 / 协作模式弹层**（`1118715`）：`getTaskConfigOptions({taskId})` + CAS 切换；
+  **不留 `prepareWorkspace` 回退**（该方法桌面端 09-17 已删）；选项是**会话域**的，
+  用 `configTaskId` 记归属，否则会把上个会话的模型列表串到下个会话。
+- **列表行操作 + 归档视图**（`9d0fb95`）：置顶/重命名/归档/取消归档/删除；
+  删除前 best-effort `stop`（BUG-23）；**不做乐观更新**，成功即重拉服务端。
+  踩到并修掉的坑：归档项**每条都带 `archived:true`**，直接复用主列表过滤器会得到
+  一个永远为空的归档列表 → `cardsFromTasks(…, {keepArchived:true})`。
+- **文件变更清单 + 两步回滚**（`fef7252`）：回滚必须先 `fileRewindPreview`
+  （服务端算 `canApply/安全/会覆盖/跳过`）再确认执行——这个判断只能在服务端做；
+  `entityId` 缺失时直接拒绝，而不是发一个注定被 CAS 拒的请求。
+- **协议层文档修正**：`docs/API.md` 原写 `payload={kind:'deltas', deltas, fromSeq, toSeq}`，
+  实际两端读的都是 **frame 层**（`convRows.ts:221` / `conversation.dart:1248`）。
+  按原文实现会拿到 `undefined` → `?? seq` 兜底 → **seq 永不推进、真断档检测失效**。
+- **验证**：三绿 —— `npm run typecheck` 0 错误、`npm test` **201** 通过
+  （本批开工时实测基线 **153**，上文「本批新增功能（09-18）」写的 122 是当时的数，
+  已被后续提交超过）、`npm run build` 通过（165.7KB / gzip 58.2KB）。
+  新增 5 个测试文件共 **48** 条。
+- **待真机验证（一律没实测过形状的部分）**：`getTaskConfigOptions` 与
+  `conversationFileChangesV4` 的返回形状只做了多形态兜底；`createSession` 的
+  `{status,result.sessionId}` 是照 Flutter 蓝本、未在本机打过；模型闸门、
+  回滚预览、归档列表、删除前 stop 均需手机复测。
+- **没做（按规矩不自作主张 / 留给下班）**：凭据是否改存 `sessionStorage`（安全↔体验，待用户裁）；
+  Web 版本可见性（`web/package.json` 仍 0.1.0 且 UI 无版本显示，要动 `vite.config.ts`）；
+  Markdown 渲染、计划面板、队列编辑、用量/自动化/我的页、`platform-request` 面板、web CI。
+

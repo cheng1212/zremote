@@ -30,6 +30,7 @@ import AttachmentBlock from '../components/AttachmentBlock.vue'
 import ConfigSheet from '../components/ConfigSheet.vue'
 import FileChangesSheet from '../components/FileChangesSheet.vue'
 import { rowFileChangeBadge } from '../lib/fileChanges'
+import { markdownFor } from '../lib/markdown'
 import type { ConvRow } from '../lib/convRows'
 
 const app = useAppStore()
@@ -299,6 +300,19 @@ function attsOf(r: ConvRow): AttItem[] {
 function textOf(r: ConvRow): string {
   return String(r['text'] ?? '')
 }
+/**
+ * 助手正文 → 已消毒的 HTML。
+ *
+ * ⚠️ 每次列表重渲染都会重新求值，所以**缓存与节流都在 `markdownFor` 里**：
+ * 终态行按文本命中缓存不重排，流式行 200ms 才真排一次（见 lib/markdown.ts）。
+ */
+function mdHtml(r: ConvRow): string {
+  return markdownFor(
+    String(r['rowId'] ?? ''),
+    textOf(r),
+    stateOf(r) === 'streaming',
+  )
+}
 function stateOf(r: ConvRow): string {
   return String(r['state'] ?? '')
 }
@@ -381,10 +395,10 @@ function isExpanded(r: ConvRow, i: number): boolean {
           <div v-else-if="kindOf(r) === 'assistantText'" class="line">
             <div class="assistant">
               <span v-if="stateOf(r) === 'streaming'" class="stream-tag">正在回复</span>
-              <div class="md body">{{ textOf(r) }}<span
-                v-if="stateOf(r) === 'streaming'"
-                class="caret"
-              >▌</span></div>
+              <!-- v-html 的内容由 lib/markdown.ts 负责：html:false + 协议白名单，
+                   源文本里的 <script> 只会变成字面文本，链接也不会挂 javascript:。 -->
+              <div class="md body" v-html="mdHtml(r)"></div>
+              <span v-if="stateOf(r) === 'streaming'" class="caret">▌</span>
             </div>
           </div>
 
@@ -636,6 +650,96 @@ function isExpanded(r: ConvRow, i: number): boolean {
   border: 1.2px solid var(--line);
   border-radius: 999px;
   cursor: pointer;
+}
+/* Markdown 正文（v-html 注入的内容不带 scoped 属性，必须 :deep）。
+   取向与 Flutter 端一致：**代码块整块铺开、不套横向内滚动**
+   （手机上"藏在滚动条里"比"换行变长"更难用）。 */
+.md.body {
+  white-space: normal;
+}
+.md.body :deep(> :first-child) {
+  margin-top: 0;
+}
+.md.body :deep(> :last-child) {
+  margin-bottom: 0;
+}
+.md.body :deep(p) {
+  margin: 0 0 8px;
+  line-height: 1.62;
+}
+.md.body :deep(ul),
+.md.body :deep(ol) {
+  margin: 0 0 8px;
+  padding-left: 22px;
+}
+.md.body :deep(li) {
+  margin: 2px 0;
+}
+.md.body :deep(h1),
+.md.body :deep(h2),
+.md.body :deep(h3),
+.md.body :deep(h4) {
+  margin: 12px 0 6px;
+  font-size: 15px;
+  line-height: 1.4;
+}
+.md.body :deep(code) {
+  font-family: var(--mono, ui-monospace, Consolas, monospace);
+  font-size: 12.5px;
+  padding: 1px 4px;
+  border-radius: 5px;
+  background: var(--surface);
+  overflow-wrap: anywhere;
+}
+.md.body :deep(pre) {
+  margin: 0 0 10px;
+  padding: 9px 11px;
+  border: 1.2px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  overflow-x: hidden;
+}
+.md.body :deep(pre code) {
+  display: block;
+  padding: 0;
+  background: none;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+.md.body :deep(table) {
+  width: 100%;
+  margin: 0 0 10px;
+  border-collapse: collapse;
+  font-size: 13px;
+  display: block;
+  overflow-x: auto;
+}
+.md.body :deep(th),
+.md.body :deep(td) {
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  text-align: left;
+}
+.md.body :deep(blockquote) {
+  margin: 0 0 8px;
+  padding: 2px 0 2px 10px;
+  border-left: 3px solid var(--line);
+  color: var(--ink-soft);
+}
+.md.body :deep(a) {
+  color: #1a56c4;
+  text-decoration: underline;
+  word-break: break-all;
+}
+.md.body :deep(img) {
+  max-width: 100%;
+  height: auto;
+}
+.md.body :deep(hr) {
+  margin: 10px 0;
+  border: none;
+  border-top: 1px solid var(--line);
 }
 .list {
   flex: 1;

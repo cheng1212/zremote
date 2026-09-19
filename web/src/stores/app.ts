@@ -52,6 +52,7 @@ import {
   type FileChangeRow,
   type RewindPreview,
 } from '../lib/fileChanges'
+import { resetStreamingMarkdown } from '../lib/markdown'
 import {
   MAX_FILE_BYTES,
   exceedsLimit,
@@ -743,6 +744,8 @@ export const useAppStore = defineStore('app', {
       // 文件变更清单与回滚预览都是**会话级**的：留着会把上个会话的清单
       // 显示在新会话里，更危险的是 rewindTarget 还指着上个回合的行。
       this.clearChanges()
+      // 流式渲染的节流态按 rowId 存，行离开列表不会自己消失——切会话时清掉。
+      resetStreamingMarkdown()
     },
 
     /** 上滑翻页：拉更早 60 条，去重前置合并。 */

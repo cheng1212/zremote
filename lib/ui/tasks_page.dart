@@ -11,7 +11,6 @@ import '../state/task_filters.dart';
 import '../state/task_sort.dart';
 import '../theme.dart';
 import 'automations_page.dart';
-import 'composer_logic.dart';
 import 'usage_page.dart';
 
 /// 任务（会话）列表页：常驻搜索 + 筛选 tab + 排序 + 富信息卡片。
@@ -249,9 +248,8 @@ class _TasksPageState extends State<TasksPage> {
   Future<void> _batchRename(List<Map<String, dynamic>> targets) async {
     final result = await showDialog<BatchRenameSpec>(
       context: context,
-      builder: (dialogCtx) => _BatchRenameDialog(
-        titles: [for (final t in targets) _taskTitle(t)],
-      ),
+      builder: (dialogCtx) =>
+          _BatchRenameDialog(titles: [for (final t in targets) _taskTitle(t)]),
     );
     if (result == null) return;
     // 逐个算出新名字（对话框已经保证规范非空）。
@@ -541,7 +539,8 @@ class _TasksPageState extends State<TasksPage> {
         if (_selected.contains('${t['taskId']}')) t,
     ];
     final allPinned =
-        selTasks.isNotEmpty && selTasks.every((t) => widget.app.isTaskPinned(t));
+        selTasks.isNotEmpty &&
+        selTasks.every((t) => widget.app.isTaskPinned(t));
     final enabled = selTasks.isNotEmpty;
     // 归档 tab 里批量操作的是"取消归档"，其它 tab 是"归档"——
     // 同一个按钮按当前 tab 换语义，和单卡菜单里的做法一致。
@@ -632,10 +631,9 @@ class _TasksPageState extends State<TasksPage> {
       nowMs: DateTime.now().millisecondsSinceEpoch,
     );
     // 有启用中定时任务的会话（标题 @sXXXX 标记匹配）→ 卡片画小时钟。
-    final cronSessions = sessionIdsWithActiveAutomation(
-      app.automations,
-      [for (final t in tasks) '${t['taskId'] ?? ''}'],
-    );
+    final cronSessions = sessionIdsWithActiveAutomation(app.automations, [
+      for (final t in tasks) '${t['taskId'] ?? ''}',
+    ]);
     final (relayColor, relayLabel) = relayStateStyle(app.relayState);
 
     return Scaffold(
@@ -643,32 +641,7 @@ class _TasksPageState extends State<TasksPage> {
       appBar: AppBar(
         title: _manage
             ? Text('已选 ${_selected.length} / ${tasks.length}')
-            : InkWell(
-                borderRadius: BorderRadius.circular(8),
-                onTap: _openWorkspaceSwitcher,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Flexible(
-                      child: Text(
-                        app.viewingAllProjects
-                            ? '全部对话'
-                            : app.workspace != null
-                            ? app.workspaceTitle(app.workspace!)
-                            : '任务',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    const Icon(
-                      Icons.expand_more_rounded,
-                      size: 18,
-                      color: ZT.inkSoft,
-                    ),
-                  ],
-                ),
-              ),
+            : const Text('全部对话'),
         actions: [
           if (!_manage)
             IconButton(
@@ -754,11 +727,11 @@ class _TasksPageState extends State<TasksPage> {
       ),
       floatingActionButton:
           _manage ||
-                  app.isReadOnlySnapshot ||
-                  (app.workspace == null && app.workspaces.length > 1)
+              app.isReadOnlySnapshot ||
+              (app.workspace == null && app.workspaces.length > 1)
           ? null
           : FloatingActionButton(
-              onPressed: _newChatWithProject,
+              onPressed: _newChat,
               mini: true,
               backgroundColor: ZT.primary,
               foregroundColor: Colors.white,
@@ -1257,9 +1230,7 @@ class _TasksPageState extends State<TasksPage> {
                   await app.pullLatest();
                   messenger.showSnackBar(
                     SnackBar(
-                      content: Text(
-                        '已按服务端对齐 · ${app.tasks.length} 个对话',
-                      ),
+                      content: Text('已按服务端对齐 · ${app.tasks.length} 个对话'),
                     ),
                   );
                 } on Object catch (e) {
@@ -1326,7 +1297,10 @@ class _TasksPageState extends State<TasksPage> {
                   messenger.showSnackBar(const SnackBar(content: Text('已断开')));
                 } on Object catch (e) {
                   messenger.showSnackBar(
-                    SnackBar(backgroundColor: ZT.rose, content: Text('断开失败: $e')),
+                    SnackBar(
+                      backgroundColor: ZT.rose,
+                      content: Text('断开失败: $e'),
+                    ),
                   );
                 }
               },
@@ -1355,9 +1329,9 @@ class _TasksPageState extends State<TasksPage> {
                   onTap: () {
                     Clipboard.setData(ClipboardData(text: v));
                     Navigator.pop(context);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('已复制版本号 $v')),
-                    );
+                    ScaffoldMessenger.of(
+                      context,
+                    ).showSnackBar(SnackBar(content: Text('已复制版本号 $v')));
                   },
                 );
               },
@@ -1417,392 +1391,8 @@ class _TasksPageState extends State<TasksPage> {
 
   // -------------------------------------------------- workspace projects
 
-  /// 项目（工作区）切换器：列出桌面端已打开的全部文件夹工作区，
-  /// 当前打勾；行内笔改本地别名；点行切换。
-  void _openWorkspaceSwitcher() {
-    final app = widget.app;
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: ZT.bg,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (sheetCtx) => AnimatedBuilder(
-        animation: app,
-        builder: (sheetCtx, _) {
-          final currentKey = app.workspace != null
-              ? app.workspaceKeyOf(app.workspace!)
-              : null;
-          return SafeArea(
-            child: Container(
-              constraints: BoxConstraints(
-                maxHeight: MediaQuery.of(sheetCtx).size.height * 0.6,
-              ),
-              padding: const EdgeInsets.fromLTRB(18, 14, 18, 18),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Center(
-                    child: Container(
-                      width: 44,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: ZT.line,
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  const Row(
-                    children: [
-                      Icon(
-                        Icons.folder_open_rounded,
-                        size: 17,
-                        color: ZT.primary,
-                      ),
-                      SizedBox(width: 8),
-                      Text(
-                        '按项目筛选（工作区）',
-                        style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  const Text(
-                    '项目 = 桌面端打开的文件夹。要新增项目，在桌面端 '
-                    'ZCode 标题栏 → 文件 → 打开工作区，这里会自动出现',
-                    style: TextStyle(fontSize: 11.5, color: ZT.inkFaint),
-                  ),
-                  const SizedBox(height: 10),
-                  Flexible(
-                    child: ListView(
-                      shrinkWrap: true,
-                      children: [
-                        // 「全部对话」与项目并列排在最上面。
-                        _allProjectsRow(sheetCtx, app),
-                        const SizedBox(height: 4),
-                        for (final w in app.workspaces)
-                          // 「全部对话」视图下不给任何项目打勾——那时并不在某个项目里。
-                          _workspaceRow(
-                            sheetCtx,
-                            app,
-                            w,
-                            app.viewingAllProjects ? null : currentKey,
-                          ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          );
-        },
-      ),
-    );
-  }
-
-  /// 「全部对话」条目：与项目并列排在最上面。
-  /// 它只换列表数据源（bootstrap 的整机任务），**不动当前项目的桥**，
-  /// 所以切回项目时不用重新开桥。
-  Widget _allProjectsRow(BuildContext sheetCtx, ZApp app) {
-    final active = app.viewingAllProjects;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
-      child: Container(
-        decoration: ShapeDecoration(
-          color: active ? ZT.lemon.withValues(alpha: 0.25) : ZT.surface,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(10),
-            side: ZT.inkSide(
-              w: active ? 1.5 : 1.2,
-              color: active ? ZT.primaryDeep : ZT.line,
-            ),
-          ),
-        ),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(10),
-          onTap: active
-              ? null
-              : () async {
-                  Navigator.pop(sheetCtx);
-                  await app.showAllProjects();
-                },
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-            child: Row(
-              children: [
-                const Icon(
-                  Icons.forum_outlined,
-                  size: 16,
-                  color: ZT.primary,
-                ),
-                const SizedBox(width: 8),
-                const Expanded(
-                  child: Text(
-                    '全部对话',
-                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800),
-                  ),
-                ),
-                Text(
-                  '跨 ${app.workspaces.length} 个项目',
-                  style: const TextStyle(fontSize: 10.5, color: ZT.inkFaint),
-                ),
-                if (active) ...[
-                  const SizedBox(width: 6),
-                  const Icon(
-                    Icons.check_circle_rounded,
-                    size: 15,
-                    color: ZT.primaryDeep,
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _workspaceRow(
-    BuildContext sheetCtx,
-    ZApp app,
-    Map<String, dynamic> w,
-    String? currentKey,
-  ) {
-    final key = app.workspaceKeyOf(w) ?? '';
-    final isCurrent = key == currentKey;
-    final name = app.workspaceTitle(w);
-    final path = '${w['workspacePath'] ?? ''}';
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
-      child: Container(
-        decoration: ShapeDecoration(
-          color: isCurrent ? ZT.lemon.withValues(alpha: 0.25) : ZT.surface,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(10),
-            side: ZT.inkSide(
-              w: isCurrent ? 1.5 : 1.2,
-              color: isCurrent ? ZT.primaryDeep : ZT.line,
-            ),
-          ),
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              child: InkWell(
-                borderRadius: BorderRadius.circular(10),
-                onTap: isCurrent
-                    ? null
-                    : () async {
-                        Navigator.pop(sheetCtx);
-                        await _switchWorkspace(w);
-                      },
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 10, 6, 10),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              name,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w800,
-                              ),
-                            ),
-                          ),
-                          if (isCurrent) ...[
-                            const SizedBox(width: 6),
-                            const Icon(
-                              Icons.check_circle_rounded,
-                              size: 15,
-                              color: ZT.primaryDeep,
-                            ),
-                          ],
-                        ],
-                      ),
-                      if (path.isNotEmpty)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 2),
-                          child: Text(
-                            path,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontSize: 10.5,
-                              color: ZT.inkFaint,
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            // 重命名（本地别名）
-            IconButton(
-              tooltip: '重命名',
-              icon: const Icon(
-                Icons.edit_outlined,
-                size: 17,
-                color: ZT.inkSoft,
-              ),
-              onPressed: () => _renameWorkspace(sheetCtx, key, name),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Future<void> _renameWorkspace(
-    BuildContext sheetCtx,
-    String key,
-    String current,
-  ) async {
-    final controller = TextEditingController(text: current);
-    final alias = await showDialog<String>(
-      context: sheetCtx,
-      builder: (dialogCtx) => AlertDialog(
-        backgroundColor: ZT.surface,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(ZT.radius),
-          side: ZT.inkSide(w: 1.6),
-        ),
-        title: const Text(
-          '重命名项目',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
-        ),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          style: const TextStyle(fontSize: 14),
-          decoration: const InputDecoration(hintText: '只影响本机显示，不改电脑文件夹名'),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogCtx),
-            child: const Text('取消', style: TextStyle(color: ZT.inkSoft)),
-          ),
-          BigButton(
-            label: '保存',
-            onPressed: () => Navigator.pop(dialogCtx, controller.text.trim()),
-          ),
-        ],
-      ),
-    );
-    controller.dispose();
-    if (alias == null) return;
-    await widget.app.renameWorkspace(key, alias);
-    if (mounted) {
-      flashMessage(context, alias.isEmpty ? '已恢复默认名' : '已重命名为「$alias」');
-    }
-  }
-
-  /// 切换工作区：开目标桥 + 退出已推入的聊天页 + 刷新。
-  Future<void> _switchWorkspace(Map<String, dynamic> w) async {
-    final name = widget.app.workspaceTitle(w);
-    try {
-      await widget.app.openWorkspace(w);
-      if (!mounted) return;
-      // 旧工作区的聊天页订阅已被释放，退回列表根。
-      Navigator.of(context).popUntil((r) => r.isFirst);
-      flashMessage(context, '已切换到「$name」');
-    } on Object catch (e) {
-      if (!mounted) return;
-      // 原始异常（ChannelRpcError 等）对用户没有意义，换成能照着做的说法。
-      flashMessage(context, friendlySwitchError('$e'), error: true);
-    }
-  }
-
-  /// 新建会话：多工作区时先选项目（当前项目直接进，其他先切换）。
-  Future<void> _newChatWithProject() async {
-    final app = widget.app;
-    if (app.workspaces.isNotEmpty) {
-      final picked = await showModalBottomSheet<Map<String, dynamic>>(
-        context: context,
-        backgroundColor: ZT.bg,
-        shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-        ),
-        builder: (sheetCtx) => SafeArea(
-          child: Container(
-            constraints: BoxConstraints(
-              maxHeight: MediaQuery.of(sheetCtx).size.height * 0.5,
-            ),
-            padding: const EdgeInsets.fromLTRB(18, 14, 18, 18),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  '在新项目里新建会话',
-                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w900),
-                ),
-                const SizedBox(height: 6),
-                const Text(
-                  '当前项目会话不切换直接进入；其他项目会先切换',
-                  style: TextStyle(fontSize: 11.5, color: ZT.inkFaint),
-                ),
-                const SizedBox(height: 10),
-                Flexible(
-                  child: ListView(
-                    shrinkWrap: true,
-                    children: [
-                      for (final w in app.workspaces)
-                        ListTile(
-                          dense: true,
-                          leading: const Icon(
-                            Icons.folder_rounded,
-                            size: 19,
-                            color: ZT.primary,
-                          ),
-                          title: Text(
-                            app.workspaceTitle(w),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                          trailing:
-                              app.workspace != null &&
-                                  app.workspaceKeyOf(app.workspace!) ==
-                                      app.workspaceKeyOf(w)
-                              ? const Icon(
-                                  Icons.check_rounded,
-                                  size: 17,
-                                  color: ZT.primaryDeep,
-                                )
-                              : null,
-                          onTap: () => Navigator.pop(sheetCtx, w),
-                        ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-      if (picked == null) return;
-      final currentKey = app.workspace != null
-          ? app.workspaceKeyOf(app.workspace!)
-          : null;
-      if (app.workspaceKeyOf(picked) != currentKey) {
-        await app.openWorkspace(picked);
-      }
-    }
-    if (!mounted) return;
+  /// 新建会话：直接在当前项目（工作区）里开草稿。
+  void _newChat() {
     widget.onNewChat();
   }
 
@@ -2305,7 +1895,10 @@ class _BatchRenameDialogState extends State<_BatchRenameDialog> {
           customBorder: const StadiumBorder(),
           onTap: onTap,
           child: Container(
-            constraints: const BoxConstraints(minHeight: 34, minWidth: ZT.tapMin),
+            constraints: const BoxConstraints(
+              minHeight: 34,
+              minWidth: ZT.tapMin,
+            ),
             alignment: Alignment.center,
             padding: const EdgeInsets.symmetric(horizontal: 13),
             child: Text(

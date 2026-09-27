@@ -1265,25 +1265,6 @@ class _TasksPageState extends State<TasksPage> {
             ),
             const Divider(color: ZT.line, thickness: 1.2),
             _drawerItem(
-              icon: Icons.link_rounded,
-              label: '重新连接',
-              onTap: () async {
-                Navigator.pop(context);
-                final messenger = ScaffoldMessenger.of(context);
-                try {
-                  await app.reconnect();
-                  messenger.showSnackBar(const SnackBar(content: Text('重连成功')));
-                } on Object catch (e) {
-                  messenger.showSnackBar(
-                    SnackBar(
-                      backgroundColor: ZT.rose,
-                      content: Text('重连失败: $e'),
-                    ),
-                  );
-                }
-              },
-            ),
-            _drawerItem(
               icon: Icons.link_off_rounded,
               label: '断开连接',
               danger: true,
@@ -1432,6 +1413,20 @@ class _TasksPageState extends State<TasksPage> {
   /// 枚举、7 天窗口逻辑、标签与单测都还在，只是没渲染。**这是有意的，
   /// 不是漏了**，别当 bug 补回来。
   /// 右侧按钮（2026-09-14 用户裁定）：原「最近更新」排序删除，同位置换成
+  /// 重连当前链路（原抽屉入口挪到这里；就地重连，不打断页面）。
+  Future<void> _reconnect() async {
+    if (widget.app.reconnectingInPlace) return;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await widget.app.reconnect();
+      messenger.showSnackBar(const SnackBar(content: Text('重连成功')));
+    } on Object catch (e) {
+      messenger.showSnackBar(
+        SnackBar(backgroundColor: ZT.rose, content: Text('重连失败: $e')),
+      );
+    }
+  }
+
   /// 会话状态筛选——一个胶囊按钮点开下拉切换，不占第二行。
   Widget _filterRow() {
     return Padding(
@@ -1544,6 +1539,41 @@ class _TasksPageState extends State<TasksPage> {
                     Icons.expand_more_rounded,
                     size: 14,
                     color: ZT.inkSoft,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          InkWell(
+            borderRadius: BorderRadius.circular(20),
+            onTap: widget.app.reconnectingInPlace
+                ? null
+                : () => _reconnect(),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: ShapeDecoration(
+                color: ZT.surface,
+                shape: StadiumBorder(side: ZT.inkSide(w: 1.2)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.link_rounded,
+                    size: 14,
+                    color: widget.app.reconnectingInPlace
+                        ? ZT.inkFaint
+                        : ZT.primaryDeep,
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    widget.app.reconnectingInPlace ? '重连中…' : '重连',
+                    style: const TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w800,
+                      color: ZT.inkSoft,
+                    ),
                   ),
                 ],
               ),

@@ -143,11 +143,6 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
   /// 列表页当前是否处于「全部对话」视图。
   bool viewingAllProjects = false;
 
-  /// 冷启动默认进「全部对话」（用户裁定：每次进来显示全部会话）。
-  /// 只在配对页发起的全新连接里消费一次；之后用户手动进项目、就地
-  /// 重连（keepShell）都不再强制，尊重当前视图。
-  bool _openAllProjectsOnConnect = true;
-
   /// 列表页真正展示的数据源：单项目视图 / 全部对话视图的**唯一分岔点**。
   List<Map<String, dynamic>> get listedTasks =>
       viewingAllProjects ? allProjectTasks : tasks;
@@ -447,14 +442,10 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
       if (picked != null) {
         await openWorkspace(picked);
       }
-      // 冷启动默认进「全部对话」：bootstrap 已带回整机任务列表（上面
-      // 408 行），切视图零开销。只对配对页发起的全新连接生效——就地
-      // 重连（keepShell）不动用户当前视图；标记只消费一次。
-      if (_openAllProjectsOnConnect && !keepShell) {
-        _openAllProjectsOnConnect = false;
-        viewingAllProjects = true;
-        notifyListeners();
-      }
+      // 恒定「全部对话」：每次连接/重连都回到全部会话（bootstrap 已带回
+      // 整机任务列表，切视图零开销）。
+      viewingAllProjects = true;
+      notifyListeners();
     } on Object catch (e) {
       connecting = false;
       failure = '$e';
@@ -530,12 +521,10 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
       _lastWaiting.clear();
       _phaseWatchPrimed = false;
       // 派生缓存全部让位服务端：重连后全量重拉，本地不留任何压在服务端
-      // 上的事实（多端一致性批次）。彻底断开 = 下次连接是全新进入，
-      // 冷启动「全部对话」默认重新生效。
+      // 上的事实（多端一致性批次）。彻底断开 = 下次连接是全新进入。
       _deletingTasks.clear();
       _archivedTaskIds.clear();
       _titleOverrides.clear();
-      _openAllProjectsOnConnect = true;
       _taskTokens.clear();
       _taskTokensAt.clear();
       _tokenSampleLogged = false;
@@ -800,10 +789,9 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
       await _mountWorkspaceStack(key);
       // 桥栈真正立起来之后才认这个工作区：中途失败时标题和列表不会各说各话。
       workspace = w;
-      // 切到具体项目就退出「全部对话」视图（数据源回到该项目自己的列表）。
-      // preserveView = 跨项目开会话的切桥（ensureTaskProject）：用户只是想
-      // 看那个会话，列表停在「全部对话」别动（多端一致性批次第三批）。
-      if (!preserveView) viewingAllProjects = false;
+      // 用户裁定（2026-09-12）：恒定「全部对话」视图——工作区挂载
+      // （重连/恢复上次工作区）不再把列表切回单项目。preserveView
+      // 参数保留供跨项目切桥调用，语义已无差别。
       _lastWorkspaceKey = key;
       unawaited(_saveLastWorkspaceKey(key));
       openingWorkspace = false;

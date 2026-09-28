@@ -665,6 +665,26 @@ class _TasksPageState extends State<TasksPage> {
                 ),
               ),
             ),
+          if (!_manage)
+            IconButton(
+              tooltip: '重新连接',
+              onPressed: widget.app.reconnectingInPlace
+                  ? null
+                  : () => _reconnect(),
+              icon: ListenableBuilder(
+                listenable: widget.app,
+                builder: (context, _) =>
+                    widget.app.reconnectingInPlace
+                    ? const Padding(
+                        padding: EdgeInsets.all(3),
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.2,
+                          color: ZT.ink,
+                        ),
+                      )
+                    : const Icon(Icons.link_rounded, color: ZT.ink),
+              ),
+            ),
           Padding(
             padding: const EdgeInsets.only(right: 6),
             child: Center(
@@ -1539,41 +1559,6 @@ class _TasksPageState extends State<TasksPage> {
                     Icons.expand_more_rounded,
                     size: 14,
                     color: ZT.inkSoft,
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          InkWell(
-            borderRadius: BorderRadius.circular(20),
-            onTap: widget.app.reconnectingInPlace
-                ? null
-                : () => _reconnect(),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: ShapeDecoration(
-                color: ZT.surface,
-                shape: StadiumBorder(side: ZT.inkSide(w: 1.2)),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    Icons.link_rounded,
-                    size: 14,
-                    color: widget.app.reconnectingInPlace
-                        ? ZT.inkFaint
-                        : ZT.primaryDeep,
-                  ),
-                  const SizedBox(width: 4),
-                  Text(
-                    widget.app.reconnectingInPlace ? '重连中…' : '重连',
-                    style: const TextStyle(
-                      fontSize: 11.5,
-                      fontWeight: FontWeight.w800,
-                      color: ZT.inkSoft,
-                    ),
                   ),
                 ],
               ),

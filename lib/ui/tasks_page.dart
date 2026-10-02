@@ -643,28 +643,8 @@ class _TasksPageState extends State<TasksPage> {
             ? Text('已选 ${_selected.length} / ${tasks.length}')
             : const Text('全部对话'),
         actions: [
-          if (!_manage)
-            IconButton(
-              tooltip: '刷新会话列表',
-              // 刷新有可见反馈：拉取中图标换成转圈，完成后弹条报数量。
-              onPressed: _refreshTasks,
-              icon: ListenableBuilder(
-                listenable: widget.app,
-                builder: (context, _) => SizedBox(
-                  width: 22,
-                  height: 22,
-                  child: widget.app.tasksLoading
-                      ? const Padding(
-                          padding: EdgeInsets.all(3),
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2.2,
-                            color: ZT.ink,
-                          ),
-                        )
-                      : const Icon(Icons.refresh_rounded, color: ZT.ink),
-                ),
-              ),
-            ),
+          // 顶栏不放刷新按钮（用户裁定 2026-10-03）：列表有 sessions-index
+          // 实时推流，手动刷新收进汉堡抽屉；顶栏只留「重新连接」。
           if (!_manage)
             IconButton(
               tooltip: '重新连接',

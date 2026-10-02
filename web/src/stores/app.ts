@@ -885,6 +885,12 @@ export const useAppStore = defineStore('app', {
     async loadChanges(): Promise<void> {
       const conv = this.conv
       const sid = this.chatMeta?.sessionId ?? ''
+      // 预览态按"回合"清，不按"会话"清：对 A 回合预览过回滚后换 B 回合
+      // 打开面板，残留的 rewindTarget 会 B 面板滚 A 回合（破坏性，审计
+      // 2026-10-03 Web-P1-1）。applyRewind 已先把 target 捕获到局部变量，
+      // 这里提前清不影响在途回滚。
+      this.rewindPreview = null
+      this.rewindTarget = null
       if (!conv || !sid) {
         this.changesError = this.isDraft ? '新会话还没有文件变更' : '桥未就绪'
         return
@@ -974,7 +980,10 @@ export const useAppStore = defineStore('app', {
             config: this.draftConfig ?? undefined,
           })
           const gotFrame = await this.openSession(created, this.chatMeta?.title || '新会话')
-          if (!gotFrame) this.log('[conv] 新会话首帧未到，仍继续发送（闸门跳过）')
+          // 首帧超时 snapshot 为 null，checkModelGate 会 ok:false 拦下——
+          // 行为是"保守拦截"，不是"跳过"（旧日志写反了，照注释改就会放行
+          // 错模型，审计 2026-10-03 Web-P2-7）。
+          if (!gotFrame) this.log('[conv] 新会话首帧未到，模型闸门将保守拦截本次发送')
           const gate = checkModelGate(this.chat?.snapshot ?? null, this.draftConfig)
           if (!gate.ok) {
             this.sendError = gate.reason

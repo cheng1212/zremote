@@ -1,7 +1,7 @@
 # Watch for device online -> auto install latest APK -> re-arm logcat capture.
 # Runs detached from any Claude session. Progress: logs\install-watch.log
-$log = 'D:\tools\zremote-new\logs\install-watch.log'
-$apk = 'D:\tools\zremote-new\build\app\outputs\flutter-apk\app-release.apk'
+$log = 'D:\Workspace\zRemote\logs\install-watch.log'
+$apk = 'D:\Workspace\zRemote\build\app\outputs\flutter-apk\app-release.apk'
 $deadline = (Get-Date).AddMinutes(30)
 "[$(Get-Date -Format 'HH:mm:ss')] watch started (max 30 min)" | Out-File $log -Append -Encoding utf8
 while ((Get-Date) -lt $deadline) {
@@ -12,7 +12,7 @@ while ((Get-Date) -lt $deadline) {
         "[$(Get-Date -Format 'HH:mm:ss')] install finished" | Out-File $log -Append -Encoding utf8
         # Clear old buffer so post-install logs start clean.
         cmd.exe /c 'adb logcat -c' 2>$null
-        Start-Process -FilePath cmd.exe -ArgumentList '/c adb logcat -b main -b crash -v time flutter:V AndroidRuntime:E DEBUG:E FATAL:E *:S >> D:\tools\zremote-new\logs\logcat-live.log 2>&1' -WindowStyle Hidden
+        Start-Process -FilePath cmd.exe -ArgumentList '/c adb logcat -b main -b crash -v time flutter:V AndroidRuntime:E DEBUG:E FATAL:E *:S >> D:\Workspace\zRemote\logs\logcat-live.log 2>&1' -WindowStyle Hidden
         "[$(Get-Date -Format 'HH:mm:ss')] logcat capture re-armed" | Out-File $log -Append -Encoding utf8
         break
     }

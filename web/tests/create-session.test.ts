@@ -24,7 +24,12 @@ function stub(responder: (method: string, args: unknown[]) => unknown) {
     },
     addEventListener: () => () => {},
   } as unknown as ChannelClient
-  const bridge = { channels: ch, scope: { workspacePath: 'C:\\proj' } } as unknown as Bridge
+  const bridge = {
+    channels: ch,
+    scope: { workspacePath: 'C:\\proj' },
+    // 恢复钩子（协议-P1-1）：ConversationV4 构造时注册。
+    onRecovered: () => {},
+  } as unknown as Bridge
   return { conv: new ConversationV4(bridge, () => {}), sent }
 }
 

@@ -27,6 +27,7 @@ export class Bridge {
   recoveredTick = 0
   private disposedFlag = false
   private degradedListeners = new Set<() => void>()
+  private recoveredListeners = new Set<() => void>()
 
   constructor(
     public session: RemoteSession,
@@ -39,6 +40,11 @@ export class Bridge {
   /** 建 rpc-frame + channel 栈（构造/恢复共用）。 */
   attach(info: Record<string, unknown>): void {
     this.info = info
+    // 旧栈必须先拆：RpcFrames 挂着 30s 清理 interval、ChannelClient 挂着
+    // 全部 IPC handlers——只覆盖引用的话旧的永不回收，且在途 call 悬到
+    // 自然超时（审计 2026-10-03 协议-P1-1）。
+    this.frames?.dispose()
+    this.channels?.dispose()
     this.frames = new RpcFrames({
       bridgeSessionId: String(info['bridgeSessionId'] ?? ''),
       bridgeGeneration: (info['bridgeGeneration'] as number | undefined) ?? undefined,
@@ -78,6 +84,16 @@ export class Bridge {
     return () => this.degradedListeners.delete(listener)
   }
 
+  /**
+   * 桥栈重建（recoverOnce 成功）后通知：订阅层据此**整条重订阅**。
+   * 不通知的话，恢复成功后 Subscription 还挂在旧 ChannelClient 上——
+   * 新栈 handlers 表为空，所有推送帧被静默丢弃，界面冻屏（审计 协议-P1-1）。
+   */
+  onRecovered(listener: () => void): () => void {
+    this.recoveredListeners.add(listener)
+    return () => this.recoveredListeners.delete(listener)
+  }
+
   /** 恢复重试直到桥健康（对齐 recoverWithRetry）。 */
   async recoverWithRetry(): Promise<void> {
     if (this.disposedFlag) return
@@ -112,6 +128,9 @@ export class Bridge {
       this.attach(info)
       this.recoveredTick++
       this.setDegraded(null)
+      // 先换栈再广播：订阅层的 resubscribe 会立刻在新 ChannelClient 上
+      // 重新 addEventListener + subscribe。
+      for (const l of this.recoveredListeners) l()
       return true
     } catch {
       return false
@@ -198,16 +217,31 @@ export class RemoteSession {
   ): Promise<RpcFramePayload> {
     const requestId = payload['requestId'] as string
     return new Promise((resolve, reject) => {
-      this.matchers.set(requestId, match)
-      this.completers.set(requestId, { resolve, reject })
-      this.relay.sendPayload(payload)
-      setTimeout(() => {
+      // 成功后也要清 timer：留着它 30s 后空转一次，还占着句柄和闭包
+      //（审计 2026-10-03 协议-P2-2，与 channelClient.settle 同款纪律）。
+      const timer = setTimeout(() => {
         if (this.completers.has(requestId)) {
           this.matchers.delete(requestId)
           this.completers.delete(requestId)
           reject(new Error(`request ${requestId} timed out`))
         }
       }, timeoutMs)
+      this.matchers.set(requestId, match)
+      this.completers.set(requestId, {
+        resolve: (p) => {
+          clearTimeout(timer)
+          this.matchers.delete(requestId)
+          this.completers.delete(requestId)
+          resolve(p)
+        },
+        reject: (e) => {
+          clearTimeout(timer)
+          this.matchers.delete(requestId)
+          this.completers.delete(requestId)
+          reject(e)
+        },
+      })
+      this.relay.sendPayload(payload)
     })
   }
 
@@ -326,6 +360,20 @@ export class RemoteSession {
       this.pendingBridgePayloads.delete(id)
       for (const payload of pending) bridge.frames.accept(payload)
     }
+  }
+
+  /**
+   * 拆掉一个活动桥（切工作区时释放旧桥用）。旧实现里 openWorkspace 只
+   * 覆盖 store 的引用，旧 Bridge 留在 activeBridges/frameRouters 里
+   * 只增不减，恢复逻辑还会对废弃桥跑 recoverWithRetry（审计 Web-P2-2）。
+   */
+  closeBridge(bridge: Bridge): void {
+    const id = String(bridge.info['bridgeSessionId'] ?? '')
+    this.frameRouters.delete(id)
+    const i = this.activeBridges.indexOf(bridge)
+    if (i >= 0) this.activeBridges.splice(i, 1)
+    this.pendingBridgePayloads.delete(id)
+    bridge.dispose()
   }
 
   dispose(): void {

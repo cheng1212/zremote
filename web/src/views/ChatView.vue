@@ -172,7 +172,10 @@ function pinToBottom(): void {
     }
   }
   pinRaf = requestAnimationFrame(tick)
-  // 兜底：无头/测试环境不驱动 rAF，至少补滚一次
+  // 兜底：无头/测试环境不驱动 rAF，至少补滚一次。
+  // 重设前先清旧的：连续两次调用时旧 timer 会在 400ms 处把第二轮
+  // pin 循环提前杀死（审计 P3-7）。
+  if (pinFallback) clearTimeout(pinFallback)
   pinFallback = setTimeout(() => {
     if (pinning) {
       pinning = false
@@ -193,6 +196,17 @@ function jumpToLatest(): void {
 function back(): void {
   app.closeSession()
 }
+
+// ── 会话切换：输入框与行展开态是**组件域**的，ChatView 切会话不卸载
+//（app.chat 从不经过 null），不清就会把 A 会话打了一半的字/展开的行
+// 带进 B 会话，误发即串会话（审计 Web-P2-6 / P3-4）。
+watch(
+  () => app.chatMeta?.sessionId,
+  () => {
+    input.value = ''
+    expanded.value = {}
+  },
+)
 
 // ── 会话切换 / 首次拿到历史：重置并钉底 ──
 watch(
@@ -349,6 +363,21 @@ function isExpanded(r: ConvRow, i: number): boolean {
         {{ app.modelTag || '模型' }}
       </button>
     </header>
+
+    <!--
+      连接中断横幅：relay 掉线后界面还看得到旧内容，「假在线」比断线更误事
+      ——发消息才知道断了。恢复由协议层自动做（重订阅 + 快照重放），这里
+      只负责诚实（审计 Web-P1-3）。
+    -->
+    <div v-if="app.relayState === 'reconnecting'" class="relay-strip">
+      连接中断，正在自动重连……恢复后消息与状态会自动补齐
+    </div>
+    <div
+      v-else-if="app.relayState === 'error' || app.relayState === 'kicked' || app.relayState === 'closed'"
+      class="relay-strip relay-strip--dead"
+    >
+      连接已断开（{{ app.relayState }}）——返回列表重新配对
+    </div>
 
     <main
       ref="listRef"
@@ -595,6 +624,19 @@ function isExpanded(r: ConvRow, i: number): boolean {
   padding: 10px 12px;
   border-bottom: 1px solid var(--line);
   background: var(--bg);
+}
+/* 断连横幅：细条不抢内容区，但一眼可见。 */
+.relay-strip {
+  padding: 7px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--lemon) 22%, var(--bg));
+  border-bottom: 1px solid var(--line);
+}
+.relay-strip--dead {
+  color: #b3261e;
+  background: color-mix(in srgb, #b3261e 10%, var(--bg));
 }
 .back {
   flex: none;

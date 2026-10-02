@@ -28,7 +28,10 @@ export class ChannelClient {
   private readyPromise: Promise<void> | null = null
   private readyReady = false
   private handlers = new Map<number, ResHandler>()
-  private pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: unknown) => void }>()
+  private pending = new Map<
+    number,
+    { resolve: (v: unknown) => void; reject: (e: unknown) => void; timer?: ReturnType<typeof setTimeout> }
+  >()
   private disposed = false
 
   constructor(
@@ -132,7 +135,7 @@ export class ChannelClient {
             break
         }
       })
-      this.pending.set(id, { resolve, reject })
+      this.pending.set(id, { resolve, reject, timer })
       this.onLog?.(`[ipc] call ${channel}.${method} id=${id}`)
       this.send(IPC_REQ_PROMISE, id, channel, method, args)
     })
@@ -187,10 +190,13 @@ export class ChannelClient {
     this.sendBody(writer.take())
   }
 
-  /** 桥栈切换时在途调用立刻报错。 */
+  /** 桥栈切换时在途调用立刻报错（超时 timer 一并清掉，别占着句柄自然触发）。 */
   dispose(): void {
     this.disposed = true
-    for (const p of this.pending.values()) p.reject(new Error('channel disposed'))
+    for (const p of this.pending.values()) {
+      if (p.timer) clearTimeout(p.timer)
+      p.reject(new Error('channel disposed'))
+    }
     this.pending.clear()
     this.handlers.clear()
   }

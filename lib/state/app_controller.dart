@@ -2259,8 +2259,16 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
 
   int _lastPollFailLogAt = 0;
 
-  /// 模型 / 思考等级 / 模式选项（zcode-task.prepareWorkspace）。
+  /// 模型 / 思考等级 / 模式选项。
   /// 实测这一步本身要 1.7~3.3s，是最该给用户让路的一个。
+  ///
+  /// 选项组是**会话域**的：`getTaskConfigOptions({taskId})` 只认 taskId。
+  /// 草稿（无会话）沿用上一次缓存的选项组、不重拉——模型清单是注册表级
+  /// 的，只有 currentValue 随会话变，草稿本来就没有"当前值"可高亮
+  /// （web 端同款裁定，见 docs/BUGFIXES.md「模型/协作模式弹层」）。
+  /// 老方法 prepareWorkspace 已随桌面端 2026-09-17 升级**删除**（调它
+  /// Method not found），不留回退——回退只会在用户面前多失败一次，
+  /// 「新建会话刷不出模型」正是这条死回退造成的。
   Future<void> loadPrep({bool force = false}) async {
     if (!force && !_backgroundGate('prep')) return;
     final conv = this.conv;
@@ -2269,52 +2277,42 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
       notifyListeners();
       return;
     }
+    final opts = prep['configOptions'];
+    final sid = chat?.sessionId ?? '';
+    if (sid.isEmpty) {
+      if (opts is! List || opts.isEmpty) {
+        prepError = '还没有模型选项缓存：先进入任一会话（打开即自动拉取），再回来选';
+        notifyListeners();
+      }
+      return;
+    }
     prepLoading = true;
     prepError = null;
     notifyListeners();
     try {
-      // 新版桌面端（2026-09-17 升级）：prepareWorkspace 已删，
-      // getTaskConfigOptions({taskId}) 接管——返回选项组数组，包一层
-      // configOptions 后 UI 解析不变。失败（含旧版 Method not found）回退旧法。
-      final sid = chat?.sessionId ?? '';
-      if (sid.isNotEmpty) {
-        try {
-          final res = await conv.getTaskConfigOptions(sid);
-          final List? groups = res is List
-              ? res
-              : (res is Map ? (res['configOptions'] as List?) : null);
-          if (groups != null) {
-            prep = {'configOptions': groups};
-            _slashCommands = const [];
-            if (groups.isEmpty) {
-              log('[app] getTaskConfigOptions 空选项组');
-            }
-            notifyListeners();
-            return;
-          }
-          log('[app] getTaskConfigOptions 意外形状: '
-              '${res.runtimeType} ${res is Map ? res.keys.toList() : ''}');
-        } on Object catch (e) {
-          log('[app] getTaskConfigOptions 失败，回退旧方法: $e');
+      final res = await conv.getTaskConfigOptions(sid);
+      final List? groups = res is List
+          ? res
+          : (res is Map ? (res['configOptions'] as List?) : null);
+      if (groups != null) {
+        prep = {'configOptions': groups};
+        _slashCommands = const [];
+        if (groups.isEmpty) {
+          log('[app] getTaskConfigOptions 空选项组');
         }
+        notifyListeners();
+        return;
       }
-      final res = await conv.prepareWorkspace();
-      if (res is Map) {
-        prep = res.cast<String, dynamic>();
-      } else {
-        prep = const {};
-        prepError = '服务端返回了意外类型：${res.runtimeType}';
-        log('[app] prepareWorkspace 非 Map: ${res.runtimeType} $res');
-      }
-      _slashCommands = castMapList(prep['slashCommands']);
-      final opts = prep['configOptions'];
-      if (opts is! List || opts.isEmpty) {
-        log('[app] prepareWorkspace 无选项: keys=${prep.keys.toList()}');
-      }
+      // 意外形状不清缓存：用户至少还能看到上一次的列表。
+      prepError = '服务端返回了意外形状：${res.runtimeType}';
+      log('[app] getTaskConfigOptions 意外形状: '
+          '${res.runtimeType} ${res is Map ? res.keys.toList() : ''}');
       notifyListeners();
     } on Object catch (e) {
+      // 不清已有缓存：拿不到新选项时，用户至少还能看到上一次的结果。
       prepError = '模型选项加载失败: $e';
-      log('[app] prepareWorkspace 失败: $e');
+      log('[app] getTaskConfigOptions 失败: $e');
+      notifyListeners();
     } finally {
       prepLoading = false;
       notifyListeners();
@@ -2494,6 +2492,9 @@ class ZApp extends ChangeNotifier with WidgetsBindingObserver {
       notifyListeners();
       // 权威历史计划异步拉一次：滑出窗口/换设备的计划不再丢。
       unawaited(_loadHistoricalPlan(sessionId));
+      // 选项组按会话下发，打开即拉：模型面板不靠手点重试，后续草稿也
+      // 有缓存可沿用（草稿无 taskId，拉不了）。
+      unawaited(loadPrep());
       // 首屏补到 100 条就停（桌面端快照只给 60）——用户裁定：一个会话
       // 几千条，**不要一进来就全拉**，要看全部得用户自己点「拉取全部」。
       unawaited(_topUpInitialHistory(sub, gen));

@@ -70,6 +70,10 @@ function onRefresh() {
   void app.refreshSessions()
 }
 
+function onDisconnect() {
+  app.disconnect()
+}
+
 onMounted(() => {
   // 已连上但还没有列表（例如刷新页面后重连）：补一次加载。
   if (app.workspace && app.allSessions.length === 0 && !app.sessionsLoading) {
@@ -85,9 +89,22 @@ onMounted(() => {
         <strong>{{ title }}</strong>
         <span class="chev">▾</span>
       </button>
-      <span class="chip" :class="app.relayState">
-        {{ app.relayState === 'paired' ? '已连接' : app.relayState }}
-      </span>
+      <div class="top-right">
+        <span class="chip" :class="app.relayState">
+          {{ app.relayState === 'paired' ? '已连接' : app.relayState }}
+        </span>
+        <!-- 断开入口：此前全应用没有任何断开 UI，出问题只能刷新页面
+             （审计 Web-P1-3）。断开回配对页，可换链接重连。 -->
+        <button
+          class="disconnect"
+          type="button"
+          aria-label="断开连接"
+          title="断开连接"
+          @click="onDisconnect"
+        >
+          ⏏
+        </button>
+      </div>
     </header>
 
     <div v-if="showSwitcher" class="card switcher">
@@ -254,6 +271,27 @@ onMounted(() => {
   justify-content: space-between;
   gap: 10px;
   margin-bottom: 10px;
+}
+.top-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.disconnect {
+  width: 34px;
+  height: 30px;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--ink-soft);
+  background: none;
+  border: 1.4px solid var(--line);
+  border-radius: 9px;
+  cursor: pointer;
+}
+.disconnect:active {
+  color: var(--ink);
+  background: var(--surface);
 }
 .ws-btn {
   display: inline-flex;

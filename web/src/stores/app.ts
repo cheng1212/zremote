@@ -96,6 +96,14 @@ let chatLoadTimer: ReturnType<typeof setTimeout> | null = null
 let chatFirstFrameSettle: ((v: boolean) => void) | null = null
 /** 在途上传的取消旗标（模块级资源，不进 state、也不进 actions）。 */
 let uploadCancel: (() => void) | null = null
+/** 模型选项请求代际：会话切换后迟到的响应按代次丢弃（审计 Web-P2-3）。 */
+let configOptionsGen = 0
+/**
+ * 当前工作区桥。同 chatSub 的理由放模块作用域：它是不可序列化的资源句柄，
+ * 放进 state 会被 Pinia 响应式包装（reactive 代理还会丢掉类的私有字段
+ * 类型，往协议层传参过不了 TS 的名义检查）。
+ */
+let bridge: Bridge | null = null
 
 /** 工作区主键：`workspaceKey` 优先，退化到 `workspacePath`（对齐 Flutter `workspaceKeyOf`）。 */
 function workspaceKeyOf(w: Workspace | null | undefined): string {
@@ -110,7 +118,6 @@ export const useAppStore = defineStore('app', {
     failure: '' as string,
     params: null as LinkParams | null,
     session: null as RemoteSession | null,
-    bridge: null as Bridge | null,
     conv: null as ConversationV4 | null,
     task: null as TaskChannel | null,
     workspaces: [] as Workspace[],
@@ -248,6 +255,13 @@ export const useAppStore = defineStore('app', {
 
     /** 顶栏当前模型短名。拿不到选项组就是空串，UI 自己降级显示。 */
     modelTag(state): string {
+      // 草稿没有会话域选项组：亮出**将要用的**模型（手选过 draftConfig 用
+      // 它，否则是工作区默认），不能拿上一个会话的 modelTag 冒充
+      //（审计 Web-P2-4）。
+      if (state.chatMeta && !state.chatMeta.sessionId) {
+        const m = state.draftConfig?.['model']
+        return typeof m === 'string' && m ? m : '默认模型'
+      }
       return modelLabel(state.configGroups)
     },
 
@@ -294,11 +308,21 @@ export const useAppStore = defineStore('app', {
       this.params = params
       this.connecting = true
       this.relayState = 'connecting'
+      let session: RemoteSession | null = null
       try {
-        const session = new RemoteSession(params, (l) => this.log(l))
+        session = new RemoteSession(params, (l) => this.log(l))
         this.session = session
+        let wasReconnecting = false
         session.relay.onState(() => {
-          this.relayState = session.relay.state as RelayUiState
+          const s = session!.relay.state as RelayUiState
+          const recovered = wasReconnecting && s === 'paired'
+          wasReconnecting = s === 'reconnecting'
+          this.relayState = s
+          if (recovered) {
+            // 订阅本身的重建在协议层（Bridge.onRecovered → resubscribe），
+            // 这里只留痕：重连成功 ≠ 界面已恢复，得等快照重放回来。
+            this.log('[relay] 重连成功，等待桥恢复与快照重放')
+          }
         })
         session.onWorkspaceList((result) => {
           const r = result as Record<string, unknown> | null
@@ -324,6 +348,13 @@ export const useAppStore = defineStore('app', {
         if (!picked && list.length === 1) picked = list[0]
         if (picked) await this.openWorkspace(picked)
       } catch (e) {
+        // 失败必须拆干净：孤儿 session 的重连定时器/心跳继续跑，旧 onState
+        // 闭包还会往 store 写状态，relayState 卡死在 connecting（审计 Web-P2-1）。
+        session?.dispose()
+        if (this.session === session) {
+          this.session = null
+          this.relayState = 'error'
+        }
         this.failure = String(e)
         throw e
       } finally {
@@ -338,6 +369,14 @@ export const useAppStore = defineStore('app', {
       const key = workspaceKeyOf(w)
       if (!key) throw new Error('工作区缺少 key')
       this.closeSession()
+      // 旧桥先拆（连带旧 index 订阅）：Bridge 底下的 RpcFrames 有 30s 清理
+      // 定时器、ChannelClient 挂着 IPC handlers，只覆盖引用旧的永不回收，
+      // activeBridges 只增不减，重连恢复还会对废弃桥跑 recoverWithRetry
+      //（审计 Web-P2-2）。
+      indexSub?.cancel()
+      indexSub = null
+      if (bridge) session.closeBridge(bridge)
+      bridge = null
       this.conv = null
       this.task = null
       this.indexCards = {}
@@ -348,8 +387,7 @@ export const useAppStore = defineStore('app', {
       this.archivedFailed = false
       this.showArchived = false
       this.listNotice = ''
-      const bridge = await session.openBridge(key)
-      this.bridge = bridge
+      bridge = await session.openBridge(key)
       this.workspace = w
       localStorage.setItem('lastWorkspaceKey', key)
 
@@ -360,7 +398,6 @@ export const useAppStore = defineStore('app', {
       // 实时帧：会话列表增量（phase 变化、新会话、删除）
       // 传 getBase 让断档 resync 能带上正确的 seq/logEpoch——不带会退化成
       // 「从头重放」，服务端可能直接拒绝或推回一大坨。
-      indexSub?.cancel()
       indexSub = conv.subscribeIndex(
         (frame) => this.applyIndexFrame(frame),
         () => ({ seq: this.indexSeq, logEpoch: this.indexLogEpoch }),
@@ -643,6 +680,9 @@ export const useAppStore = defineStore('app', {
         if (chatFirstFrameSettle === finish) chatFirstFrameSettle = null
         resolveFirst(v)
       }
+      // 并发打开（双击两个会话）：上一场在途的首帧等待先落地（false），
+      // 否则它的 promise 永久悬挂、闭包链也挂着（审计 P3-1）。
+      chatFirstFrameSettle?.(false)
       chatFirstFrameSettle = finish
       const clearLoadTimer = () => {
         if (chatLoadTimer) {
@@ -715,6 +755,12 @@ export const useAppStore = defineStore('app', {
       this.chat = createConvState()
       this.chatMeta = { sessionId: '', title: '新会话' }
       this.draftConfig = null
+      // 选项组是**会话域**的，草稿没有 taskId 拉不了：不清就会把上一个
+      // 会话的模型列表和「当前模型」高亮原样带进草稿页，用户以为还在用
+      // 刚才那个模型，首条消息可能进错（审计 Web-P2-4）。
+      this.configGroups = []
+      this.configTaskId = ''
+      this.configError = ''
       this.chatLoading = false
       this.sendError = ''
       this.loadingOlder = false
@@ -736,6 +782,15 @@ export const useAppStore = defineStore('app', {
       const settle = chatFirstFrameSettle
       chatFirstFrameSettle = null
       settle?.(false)
+      // 上传是**会话域**的：离开会话先取消在途上传、清空待发列表——否则
+      // A 会话传完的 ref 会被追加进 B 会话的待发送，在 B 发送把 A 的附件
+      // 带出去（审计 Web-P1-2）。
+      uploadCancel?.()
+      uploadCancel = null
+      this.pendingAttachments = []
+      this.uploadErr = ''
+      this.uploadPct = null
+      this.uploadName = ''
       this.chat = null
       this.chatMeta = null
       this.sendError = ''
@@ -802,10 +857,17 @@ export const useAppStore = defineStore('app', {
       }
       if (!sid) return
       if (!force && this.configTaskId === sid && this.configGroups.length > 0) return
+      // 代际守卫：A 会话的响应晚于 B 的到达时，不能让 A 落盘——否则顶栏
+      // 显示 A 的模型、切模型拿 A 的选项去切 B 的会话（审计 Web-P2-3）。
+      const gen = ++configOptionsGen
       this.configLoading = true
       this.configError = ''
       try {
         const groups = parseConfigGroups(await task.getTaskConfigOptions(sid))
+        if (gen !== configOptionsGen) {
+          this.log('[cfg] 选项响应迟到（会话已切换），丢弃')
+          return
+        }
         this.configGroups = groups
         this.configTaskId = sid
         if (groups.length === 0) {
@@ -813,11 +875,12 @@ export const useAppStore = defineStore('app', {
           this.log('[cfg] getTaskConfigOptions 空选项组')
         }
       } catch (e) {
+        if (gen !== configOptionsGen) return
         // 不清空已有缓存：拿不到新选项时，让用户至少还能看到上一次的结果。
         this.configError = errorValueText(e) ?? String(e)
         this.log(`[cfg] getTaskConfigOptions 失败: ${this.configError}`)
       } finally {
-        this.configLoading = false
+        if (gen === configOptionsGen) this.configLoading = false
       }
     },
 
@@ -825,7 +888,12 @@ export const useAppStore = defineStore('app', {
     async applyModel(modelValue: string): Promise<boolean> {
       const conv = this.conv
       const sel = buildModelSelection(this.configGroups, modelValue)
-      if (!conv || !sel) return false
+      if (!conv) return false
+      if (!sel) {
+        // 静默 return false 会让按钮点了没反应还查不到原因（审计 P3-8）。
+        this.configError = `选项里没有「${modelValue}」（列表可能还没加载好）`
+        return false
+      }
       if (this.isDraft) {
         this.draftConfig = { ...sel }
         this.configError = ''
@@ -979,6 +1047,15 @@ export const useAppStore = defineStore('app', {
           const created = await conv.createSession(key, {
             config: this.draftConfig ?? undefined,
           })
+          // 建会话在途时用户可能已按返回（closeSession 清了 chatMeta）：
+          // 不该再把人拽进刚建的会话——卡片已在列表里，用户自己点
+          //（审计 Web-P1-4）。
+          if (!this.isDraft) {
+            this.log('[conv] 草稿发送期间已离开，会话已建但不跳转')
+            this.draftConfig = null
+            void this.loadSessions()
+            return
+          }
           const gotFrame = await this.openSession(created, this.chatMeta?.title || '新会话')
           // 首帧超时 snapshot 为 null，checkModelGate 会 ok:false 拦下——
           // 行为是"保守拦截"，不是"跳过"（旧日志写反了，照注释改就会放行
@@ -1098,10 +1175,14 @@ export const useAppStore = defineStore('app', {
       this.uploadErr = ''
       this.uploadName = file.name
       this.uploadPct = 0
+      // 上传发起时的会话：完成时校验——中途切了会话，ref 属于旧会话，
+      // 追加进新会话的待发列表就是把 A 的附件带进 B（审计 Web-P1-2）。
+      const startedSid = sid
       let cancelled = false
-      uploadCancel = () => {
+      const myCancel = () => {
         cancelled = true
       }
+      uploadCancel = myCancel
       try {
         const bytes = new Uint8Array(await file.arrayBuffer())
         const res = await conv.attachmentPut(sid, {
@@ -1109,22 +1190,31 @@ export const useAppStore = defineStore('app', {
           mime,
           bytes,
           onProgress: (p) => {
-            this.uploadPct = p
+            // 进度条也跟着会话走：离开原会话就别再刷新（残留进度条）。
+            if (this.chatMeta?.sessionId === startedSid) this.uploadPct = p
           },
           isCancelled: () => cancelled,
         })
+        if (this.chatMeta?.sessionId !== startedSid) {
+          this.log(`[upload] ${file.name} 上传完成但已离开原会话，附件丢弃`)
+          return false
+        }
         this.pendingAttachments = [...this.pendingAttachments, res]
         this.log(`[upload] ${file.name} → ${res.ref}`)
         return true
       } catch (e) {
         const msg = errorValueText(e) ?? String(e)
-        this.uploadErr = `${file.name} 上传失败：${msg}`
+        if (this.chatMeta?.sessionId === startedSid) {
+          this.uploadErr = `${file.name} 上传失败：${msg}`
+        }
         this.log(`[upload] 失败: ${msg}`)
         return false
       } finally {
         this.uploadPct = null
         this.uploadName = ''
-        uploadCancel = null
+        // 只清自己的取消旗标：并发上传时后者已覆盖 uploadCancel，
+        // 前者的 finally 抢先置 null 会让后者的「取消」失效（审计 Web-P2-5）。
+        if (uploadCancel === myCancel) uploadCancel = null
       }
     },
 
@@ -1207,7 +1297,7 @@ export const useAppStore = defineStore('app', {
       indexSub = null
       this.session?.dispose()
       this.session = null
-      this.bridge = null
+      bridge = null
       this.conv = null
       this.task = null
       this.workspace = null

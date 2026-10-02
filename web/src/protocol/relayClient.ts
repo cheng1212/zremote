@@ -161,6 +161,12 @@ export class RelayClient {
       if (this.outbound.length < 100) {
         this.onLog?.(`[relay] queued (state=${this._state})`)
         this.outbound.push(payload as RelayFrame)
+      } else {
+        // 队满丢弃必须留痕：静默蒸发的话，调用方只能等 30s 超时，
+        // 长断线期间的问题完全无从定位（审计 协议-P2-5）。
+        this.onLog?.(
+          `[relay] outbound full (${this.outbound.length}), dropping ${String(payload['zcode_type'] ?? payload['type'] ?? 'payload')}`,
+        )
       }
       return
     }

@@ -93,6 +93,9 @@ export class RpcFrames {
     const checksum = (payload['checksum'] as Record<string, unknown> | undefined)?.value as
       | string
       | undefined
+    // checksum 统一归一到 null：双方都不带时 undefined !== null 恒真，
+    // 会把同元数据的复用误判成冲突（审计 2026-10-03 协议-P2-1）。
+    const checksumKey = checksum ?? null
     if (
       messageSeq == null ||
       fragmentIndex == null ||
@@ -127,19 +130,22 @@ export class RpcFrames {
       existing &&
       (existing.fragmentCount !== fragmentCount ||
         existing.messageBytes !== messageBytes ||
-        existing.checksum !== checksum)
+        existing.checksum !== checksumKey)
     ) {
+      // messageSeq 被复用（服务端重启/恢复后计数器重置）：删掉过期
+      // assembly 后**继续收下当前片**——旧实现直接 return，把当前片也丢了，
+      // 后续分片建出的 assembly 永远缺首片，60s 后被 purge 静默丢消息
+      //（审计 协议-P2-1）。
       this.assemblies.delete(messageSeq)
-      return
     }
     let assembly = existing
-    if (!assembly) {
+    if (!assembly || this.assemblies.get(messageSeq) !== assembly) {
       assembly = {
         parts: new Array(fragmentCount).fill(null),
         received: 0,
         fragmentCount,
         messageBytes,
-        checksum: checksum ?? null,
+        checksum: checksumKey,
         createdAt: Date.now(),
       }
       this.assemblies.set(messageSeq, assembly)

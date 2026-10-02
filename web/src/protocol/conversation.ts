@@ -87,7 +87,21 @@ export class ConversationV4 {
   constructor(
     public bridge: Bridge,
     private onLog?: (line: string) => void,
-  ) {}
+  ) {
+    // 桥恢复（relay 重连 / bridge-degraded 恢复成功）= 底下换了整套
+    // ChannelClient：所有存活订阅必须整条重订阅（换新 subscriptionId、
+    // 监听器挂到新栈），握手态一并作废——connectionId 属于旧栈，留着
+    // 会让 attachmentPut 静默失败。不接这条，恢复成功后界面照样冻屏
+    //（审计 2026-10-03 协议-P1-1）。
+    this.bridge.onRecovered(() => {
+      this.onLog?.('[v4] bridge recovered → resubscribe all')
+      this.handshaken = false
+      this.handshakePromise = null
+      this.connectionId = null
+      for (const s of this.convSubs.values()) s.resubscribe()
+      this.indexSub?.resubscribe()
+    })
+  }
 
   private get ch(): ChannelClient {
     return this.bridge.channels
@@ -132,22 +146,27 @@ export class ConversationV4 {
     onFrame: (frame: Frame) => void,
     getBase?: () => { seq: number; logEpoch: string | null },
   ): Subscription {
-    const sub = new Subscription(this.ch, {
-      channel: CONV_CHANNEL,
-      event: EV_CONV_FRAME,
-      subscribeMethod: M_SUBSCRIBE_CONV,
-      unsubscribeMethod: M_UNSUBSCRIBE_CONV,
-      resyncMethod: M_RESYNC_CONV,
-      subscribeArgs: { sessionId },
-      unsubscribeArgs: {},
-      // 断档恢复靠整份快照：本地 seq 已对不上，只有全量能重新对齐。
-      resyncArgs: { forceSnapshot: true },
-      tag: 'v4',
-      scope: () => this.bridge.scope,
-      onFrame,
-      getBase: getBase ?? (() => ({ seq: 0, logEpoch: null })),
-      onLog: this.onLog,
-    })
+    // ⚠️ 传**延迟取值**：桥恢复重建栈后 resubscribe 必须挂到新 ChannelClient
+    // 上，构造时捕获实例会让重订阅继续挂在死栈上（审计 协议-P1-1）。
+    const sub = new Subscription(
+      () => this.ch,
+      {
+        channel: CONV_CHANNEL,
+        event: EV_CONV_FRAME,
+        subscribeMethod: M_SUBSCRIBE_CONV,
+        unsubscribeMethod: M_UNSUBSCRIBE_CONV,
+        resyncMethod: M_RESYNC_CONV,
+        subscribeArgs: { sessionId },
+        unsubscribeArgs: {},
+        // 断档恢复靠整份快照：本地 seq 已对不上，只有全量能重新对齐。
+        resyncArgs: { forceSnapshot: true },
+        tag: 'v4',
+        scope: () => this.bridge.scope,
+        onFrame,
+        getBase: getBase ?? (() => ({ seq: 0, logEpoch: null })),
+        onLog: this.onLog,
+      },
+    )
     // 同时只显示一个会话：开新订阅前必须把**所有**在途的会话订阅拆掉。
     // 原先只取消「同一个 sessionId 的旧订阅」，于是每换一个新会话就留下一个
     // Subscription——它构造时起了 30s 的分片清理 setInterval，没人 cancel
@@ -169,26 +188,29 @@ export class ConversationV4 {
     onFrame: (frame: Frame) => void,
     getBase?: () => { seq: number; logEpoch: string | null },
   ): Subscription {
-    const sub = new Subscription(this.ch, {
-      channel: CONV_CHANNEL,
-      event: EV_INDEX_FRAME,
-      subscribeMethod: M_SUBSCRIBE_INDEX,
-      unsubscribeMethod: M_UNSUBSCRIBE_INDEX,
-      resyncMethod: M_RESYNC_INDEX,
-      // ⚠️ 订阅**不能**带 runtimePolicy:'existing-only'——该策略语义是
-      // 「只准挂到已经在跑的运行时上」，目标工作区的 agent 运行时没在跑时
-      // 桌面端会在 1ms 内直接拒绝（ZCode Agent runtime is not running），
-      // 切项目必然报错（BUG-09）。不传则桌面端走 start-if-needed。
-      subscribeArgs: {},
-      // 退订 / 重同步**保持** existing-only：清理与断线恢复路径不该顺手启动运行时。
-      unsubscribeArgs: { runtimePolicy: 'existing-only' },
-      resyncArgs: { runtimePolicy: 'existing-only', forceSnapshot: true },
-      tag: 'v4-index',
-      scope: () => this.bridge.scope,
-      onFrame,
-      getBase: getBase ?? (() => ({ seq: 0, logEpoch: null })),
-      onLog: this.onLog,
-    })
+    const sub = new Subscription(
+      () => this.ch,
+      {
+        channel: CONV_CHANNEL,
+        event: EV_INDEX_FRAME,
+        subscribeMethod: M_SUBSCRIBE_INDEX,
+        unsubscribeMethod: M_UNSUBSCRIBE_INDEX,
+        resyncMethod: M_RESYNC_INDEX,
+        // ⚠️ 订阅**不能**带 runtimePolicy:'existing-only'——该策略语义是
+        // 「只准挂到已经在跑的运行时上」，目标工作区的 agent 运行时没在跑时
+        // 桌面端会在 1ms 内直接拒绝（ZCode Agent runtime is not running），
+        // 切项目必然报错（BUG-09）。不传则桌面端走 start-if-needed。
+        subscribeArgs: {},
+        // 退订 / 重同步**保持** existing-only：清理与断线恢复路径不该顺手启动运行时。
+        unsubscribeArgs: { runtimePolicy: 'existing-only' },
+        resyncArgs: { runtimePolicy: 'existing-only', forceSnapshot: true },
+        tag: 'v4-index',
+        scope: () => this.bridge.scope,
+        onFrame,
+        getBase: getBase ?? (() => ({ seq: 0, logEpoch: null })),
+        onLog: this.onLog,
+      },
+    )
     this.indexSub?.cancel()
     this.indexSub = sub
     void sub.start().catch((e) => this.onLog?.(`[v4] index subscribe failed: ${e}`))

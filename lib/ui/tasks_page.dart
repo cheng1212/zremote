@@ -799,10 +799,11 @@ class _TasksPageState extends State<TasksPage> {
                 Expanded(
                   child: RefreshIndicator(
                     color: ZT.primaryDeep,
-                    // 下拉刷新跟着当前数据源走，别在「全部对话」里刷当前项目的列表。
-                    onRefresh: app.viewingAllProjects
-                        ? app.loadAllProjectTasks
-                        : app.loadTasks,
+                    // 下拉 = 重新连接（2026-10-04 用户裁定）：列表有
+                    // sessions-index 实时推流，手动刷列表价值不大；真痛点是
+                    // 断线/假在线，把这个最高频手势直接给就地重连——转圈转到
+                    // 重连结束，成功/失败有 SnackBar（_reconnect 自带）。
+                    onRefresh: _reconnect,
                     child: tasks.isEmpty
                         ? ListView(
                             physics: const AlwaysScrollableScrollPhysics(),
